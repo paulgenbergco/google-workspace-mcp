@@ -1,0 +1,13 @@
+{
+  "accounts": {
+    "personal": {
+      "email": "your.personal@gmail.com",
+      "description": "Personal Gmail account"
+    },
+    "work": {
+      "email": "your.work@company.com",
+      "description": "Work account"
+    }
+  },
+  "credentials_dir": "./credentials"
+}

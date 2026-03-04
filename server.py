@@ -20,6 +20,7 @@ from mcp.server.stdio import stdio_server
 
 from auth import AuthManager
 from config import get_accounts, get_client_secret_path, get_credentials_dir, load_config
+from gcalendar import CalendarService
 from gmail import GmailService
 
 # ---------------------------------------------------------------------------
@@ -41,12 +42,11 @@ except FileNotFoundError as exc:
 # ---------------------------------------------------------------------------
 
 
-def _get_service(account_name: str) -> GmailService:
-    """Return an authenticated GmailService or raise ValueError."""
+def _get_creds(account_name: str):
+    """Return valid credentials for an account or raise ValueError."""
     if account_name not in _accounts:
-        available = list(_accounts.keys())
         raise ValueError(
-            f"Unknown account '{account_name}'. Available: {available}"
+            f"Unknown account '{account_name}'. Available: {list(_accounts.keys())}"
         )
     creds = _auth.get_credentials(account_name)
     if creds is None:
@@ -55,7 +55,15 @@ def _get_service(account_name: str) -> GmailService:
             f"Account '{account_name}' ({email}) is not authenticated. "
             "Run 'python setup_auth.py' to authenticate."
         )
-    return GmailService(creds, account_name)
+    return creds
+
+
+def _get_service(account_name: str) -> GmailService:
+    return GmailService(_get_creds(account_name), account_name)
+
+
+def _get_calendar(account_name: str) -> CalendarService:
+    return CalendarService(_get_creds(account_name), account_name)
 
 
 def _fmt(data: Any) -> list[types.TextContent]:
@@ -269,6 +277,98 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["account", "message_id"],
             },
         ),
+        # ── Calendar tools ──────────────────────────────────────────────────
+        types.Tool(
+            name="calendar_list_calendars",
+            description="List all Google Calendars available for an account (primary, work, shared, etc.).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                },
+                "required": ["account"],
+            },
+        ),
+        types.Tool(
+            name="calendar_list_events",
+            description=(
+                "List upcoming calendar events for an account. "
+                "Optionally filter by time range and calendar. "
+                "Times must be in RFC3339 format, e.g. '2026-03-10T00:00:00Z'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "calendar_id": {
+                        "type": "string",
+                        "description": "Calendar ID (default: 'primary'). Use calendar_list_calendars to get IDs.",
+                        "default": "primary",
+                    },
+                    "time_min": {
+                        "type": "string",
+                        "description": "Start of range (RFC3339). Defaults to now.",
+                    },
+                    "time_max": {
+                        "type": "string",
+                        "description": "End of range (RFC3339). Optional.",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max events to return (default 20, max 50)",
+                        "default": 20,
+                    },
+                },
+                "required": ["account"],
+            },
+        ),
+        types.Tool(
+            name="calendar_search",
+            description="Search for events by keyword across a calendar (title, description, location, attendees).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "query": {"type": "string", "description": "Search keyword(s)"},
+                    "calendar_id": {
+                        "type": "string",
+                        "description": "Calendar ID (default: 'primary')",
+                        "default": "primary",
+                    },
+                    "time_min": {
+                        "type": "string",
+                        "description": "Start of range (RFC3339). Defaults to now.",
+                    },
+                    "time_max": {
+                        "type": "string",
+                        "description": "End of range (RFC3339). Optional.",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max results (default 20)",
+                        "default": 20,
+                    },
+                },
+                "required": ["account", "query"],
+            },
+        ),
+        types.Tool(
+            name="calendar_get_event",
+            description="Get full details of a specific calendar event by its ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "event_id": {"type": "string", "description": "Event ID (from list or search results)"},
+                    "calendar_id": {
+                        "type": "string",
+                        "description": "Calendar ID (default: 'primary')",
+                        "default": "primary",
+                    },
+                },
+                "required": ["account", "event_id"],
+            },
+        ),
     ]
 
 
@@ -392,6 +492,40 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
             svc = _get_service(args["account"])
             svc.trash_message(args["message_id"])
             return _fmt({"status": "moved to trash", "message_id": args["message_id"]})
+
+        # ---- calendar_list_calendars --------------------------------------
+        elif name == "calendar_list_calendars":
+            svc = _get_calendar(args["account"])
+            return _fmt(svc.list_calendars())
+
+        # ---- calendar_list_events -----------------------------------------
+        elif name == "calendar_list_events":
+            svc = _get_calendar(args["account"])
+            return _fmt(svc.list_events(
+                time_min=args.get("time_min"),
+                time_max=args.get("time_max"),
+                max_results=int(args.get("max_results", 20)),
+                calendar_id=args.get("calendar_id", "primary"),
+            ))
+
+        # ---- calendar_search ----------------------------------------------
+        elif name == "calendar_search":
+            svc = _get_calendar(args["account"])
+            return _fmt(svc.search_events(
+                query=args["query"],
+                time_min=args.get("time_min"),
+                time_max=args.get("time_max"),
+                max_results=int(args.get("max_results", 20)),
+                calendar_id=args.get("calendar_id", "primary"),
+            ))
+
+        # ---- calendar_get_event -------------------------------------------
+        elif name == "calendar_get_event":
+            svc = _get_calendar(args["account"])
+            return _fmt(svc.get_event(
+                event_id=args["event_id"],
+                calendar_id=args.get("calendar_id", "primary"),
+            ))
 
         else:
             return _fmt(f"Unknown tool: {name}")

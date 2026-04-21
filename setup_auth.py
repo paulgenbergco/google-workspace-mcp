@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-One-time authentication setup for all Gmail accounts in config.json.
+One-time authentication setup for all Google Workspace accounts in config.json.
 
 Run this BEFORE starting the MCP server:
     python setup_auth.py
@@ -27,8 +27,8 @@ How to get your client_secret.json
 ───────────────────────────────────
 1. Go to https://console.cloud.google.com/
 2. Create (or select) a project
-3. Enable the Gmail API:
-   APIs & Services → Library → search "Gmail API" → Enable
+3. Enable the Gmail API, Calendar API, and Drive API:
+   APIs & Services → Library → search each API → Enable
 4. Create OAuth 2.0 credentials:
    APIs & Services → Credentials → + Create Credentials → OAuth client ID
    Application type: Desktop app
@@ -63,7 +63,7 @@ def main() -> None:
 
     auth = AuthManager(credentials_dir, client_secret_path)
 
-    print(f"Gmail Multi-Account MCP — Authentication Setup")
+    print(f"Google Workspace MCP — Authentication Setup")
     print(f"{'─' * 50}")
     print(f"Found {len(accounts)} account(s) in config.json.\n")
 

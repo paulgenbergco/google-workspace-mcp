@@ -1,8 +1,8 @@
 """
-Gmail Multi-Account MCP Server
--------------------------------
-Exposes Gmail operations for multiple Google accounts via the
-Model Context Protocol (MCP) stdio transport.
+Google Workspace Multi-Account MCP Server
+------------------------------------------
+Exposes Gmail, Google Calendar, and Google Drive operations for multiple
+Google accounts via the Model Context Protocol (MCP) stdio transport.
 
 Start with:  python server.py
 Configure accounts in config.json and authenticate with: python setup_auth.py
@@ -21,6 +21,7 @@ from mcp.server.stdio import stdio_server
 from auth import AuthManager
 from config import get_accounts, get_client_secret_path, get_credentials_dir, load_config
 from gcalendar import CalendarService
+from gdrive import DriveService
 from gmail import GmailService
 
 # ---------------------------------------------------------------------------
@@ -66,6 +67,10 @@ def _get_calendar(account_name: str) -> CalendarService:
     return CalendarService(_get_creds(account_name), account_name)
 
 
+def _get_drive(account_name: str) -> DriveService:
+    return DriveService(_get_creds(account_name), account_name)
+
+
 def _fmt(data: Any) -> list[types.TextContent]:
     if isinstance(data, str):
         return [types.TextContent(type="text", text=data)]
@@ -76,7 +81,7 @@ def _fmt(data: Any) -> list[types.TextContent]:
 # MCP Server
 # ---------------------------------------------------------------------------
 
-server = Server("gmail-multi-account")
+server = Server("google-workspace")
 
 
 @server.list_tools()
@@ -369,6 +374,174 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["account", "event_id"],
             },
         ),
+        # ── Drive tools ────────────────────────────────────────────────────
+        types.Tool(
+            name="drive_search",
+            description=(
+                "Search Google Drive files using Drive query syntax. "
+                "Examples: \"name contains 'invoice'\", \"mimeType = 'application/pdf'\", "
+                "\"fullText contains 'quarterly report'\". "
+                "Searches a single account or all accounts if 'account' is omitted."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {
+                        "type": "string",
+                        "description": "Account to search. Omit to search all accounts.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Drive search query (same syntax as Drive search bar)",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max results per account (default 20, max 100)",
+                        "default": 20,
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        types.Tool(
+            name="drive_list_recent",
+            description="List recently modified files in Google Drive for an account.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max files to return (default 20, max 100)",
+                        "default": 20,
+                    },
+                },
+                "required": ["account"],
+            },
+        ),
+        types.Tool(
+            name="drive_get_file",
+            description="Get detailed metadata for a specific file in Google Drive.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "file_id": {"type": "string", "description": "File ID (from search or list results)"},
+                },
+                "required": ["account", "file_id"],
+            },
+        ),
+        types.Tool(
+            name="drive_read_content",
+            description=(
+                "Read the content of a file in Google Drive. "
+                "Automatically exports Google Docs as plain text, Sheets as CSV, "
+                "and Slides as plain text. Returns content for text-based files; "
+                "for binary files, returns a link."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "file_id": {"type": "string", "description": "File ID"},
+                },
+                "required": ["account", "file_id"],
+            },
+        ),
+        types.Tool(
+            name="drive_upload",
+            description="Upload a new file to Google Drive with text content.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "name": {"type": "string", "description": "File name (e.g. 'notes.txt', 'data.csv')"},
+                    "content": {"type": "string", "description": "File content (text)"},
+                    "mime_type": {
+                        "type": "string",
+                        "description": "MIME type (default: 'text/plain'). Use 'text/csv' for CSV, etc.",
+                        "default": "text/plain",
+                    },
+                    "parent_folder_id": {
+                        "type": "string",
+                        "description": "Parent folder ID. Omit for root.",
+                    },
+                },
+                "required": ["account", "name", "content"],
+            },
+        ),
+        types.Tool(
+            name="drive_update",
+            description="Update the content of an existing file in Google Drive.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "file_id": {"type": "string", "description": "File ID to update"},
+                    "content": {"type": "string", "description": "New file content (text)"},
+                    "mime_type": {
+                        "type": "string",
+                        "description": "MIME type (default: 'text/plain')",
+                        "default": "text/plain",
+                    },
+                },
+                "required": ["account", "file_id", "content"],
+            },
+        ),
+        types.Tool(
+            name="drive_create_folder",
+            description="Create a new folder in Google Drive.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "name": {"type": "string", "description": "Folder name"},
+                    "parent_folder_id": {
+                        "type": "string",
+                        "description": "Parent folder ID. Omit for root.",
+                    },
+                },
+                "required": ["account", "name"],
+            },
+        ),
+        types.Tool(
+            name="drive_move",
+            description="Move a file or folder to a different parent folder.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "file_id": {"type": "string", "description": "File or folder ID to move"},
+                    "new_parent_id": {"type": "string", "description": "Destination folder ID"},
+                },
+                "required": ["account", "file_id", "new_parent_id"],
+            },
+        ),
+        types.Tool(
+            name="drive_rename",
+            description="Rename a file or folder in Google Drive.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "file_id": {"type": "string", "description": "File or folder ID"},
+                    "new_name": {"type": "string", "description": "New name"},
+                },
+                "required": ["account", "file_id", "new_name"],
+            },
+        ),
+        types.Tool(
+            name="drive_trash",
+            description="Move a file or folder to the trash in Google Drive.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                    "file_id": {"type": "string", "description": "File or folder ID"},
+                },
+                "required": ["account", "file_id"],
+            },
+        ),
     ]
 
 
@@ -526,6 +699,100 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 event_id=args["event_id"],
                 calendar_id=args.get("calendar_id", "primary"),
             ))
+
+        # ---- drive_search -------------------------------------------------
+        elif name == "drive_search":
+            query: str = args["query"]
+            max_results: int = int(args.get("max_results", 20))
+            account: str | None = args.get("account")
+
+            if account:
+                svc = _get_drive(account)
+                data = svc.search_files(query, max_results)
+                data["account"] = account
+                data["email"] = _accounts[account].get("email", "")
+                return _fmt(data)
+            else:
+                all_results = []
+                for acct in _accounts:
+                    try:
+                        svc = _get_drive(acct)
+                        data = svc.search_files(query, max_results)
+                        all_results.append({
+                            "account": acct,
+                            "email": _accounts[acct].get("email", ""),
+                            **data,
+                        })
+                    except ValueError as exc:
+                        all_results.append({
+                            "account": acct,
+                            "error": str(exc),
+                            "files": [],
+                        })
+                return _fmt(all_results)
+
+        # ---- drive_list_recent --------------------------------------------
+        elif name == "drive_list_recent":
+            svc = _get_drive(args["account"])
+            return _fmt(svc.list_recent(int(args.get("max_results", 20))))
+
+        # ---- drive_get_file -----------------------------------------------
+        elif name == "drive_get_file":
+            svc = _get_drive(args["account"])
+            return _fmt(svc.get_file(args["file_id"]))
+
+        # ---- drive_read_content -------------------------------------------
+        elif name == "drive_read_content":
+            svc = _get_drive(args["account"])
+            return _fmt(svc.read_content(args["file_id"]))
+
+        # ---- drive_upload -------------------------------------------------
+        elif name == "drive_upload":
+            svc = _get_drive(args["account"])
+            result = svc.upload_file(
+                name=args["name"],
+                content=args["content"],
+                mime_type=args.get("mime_type", "text/plain"),
+                parent_folder_id=args.get("parent_folder_id"),
+            )
+            return _fmt({"status": "uploaded", **result})
+
+        # ---- drive_update -------------------------------------------------
+        elif name == "drive_update":
+            svc = _get_drive(args["account"])
+            result = svc.update_file(
+                file_id=args["file_id"],
+                content=args["content"],
+                mime_type=args.get("mime_type", "text/plain"),
+            )
+            return _fmt({"status": "updated", **result})
+
+        # ---- drive_create_folder ------------------------------------------
+        elif name == "drive_create_folder":
+            svc = _get_drive(args["account"])
+            result = svc.create_folder(
+                name=args["name"],
+                parent_folder_id=args.get("parent_folder_id"),
+            )
+            return _fmt({"status": "folder created", **result})
+
+        # ---- drive_move ---------------------------------------------------
+        elif name == "drive_move":
+            svc = _get_drive(args["account"])
+            result = svc.move_file(args["file_id"], args["new_parent_id"])
+            return _fmt({"status": "moved", **result})
+
+        # ---- drive_rename -------------------------------------------------
+        elif name == "drive_rename":
+            svc = _get_drive(args["account"])
+            result = svc.rename_file(args["file_id"], args["new_name"])
+            return _fmt({"status": "renamed", **result})
+
+        # ---- drive_trash --------------------------------------------------
+        elif name == "drive_trash":
+            svc = _get_drive(args["account"])
+            result = svc.trash_file(args["file_id"])
+            return _fmt({"status": "moved to trash", **result})
 
         else:
             return _fmt(f"Unknown tool: {name}")

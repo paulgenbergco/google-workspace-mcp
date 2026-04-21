@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "=== Gmail Multi-Account MCP Setup ==="
+echo "=== Google Workspace Multi-Account MCP Setup ==="
 echo ""
 
 # ── Python check ────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ echo "1. Edit config.json — add your Gmail accounts (already open if you just 
 echo ""
 echo "2. Get your OAuth credentials from Google Cloud Console:"
 echo "   • https://console.cloud.google.com/"
-echo "   • Create a project → Enable Gmail API"
+echo "   • Create a project → Enable Gmail API, Calendar API, and Drive API"
 echo "   • APIs & Services → Credentials → OAuth 2.0 Client ID (Desktop app)"
 echo "   • Download JSON → save as:  $SCRIPT_DIR/credentials/client_secret.json"
 echo ""
@@ -66,10 +66,10 @@ echo "4. Add the MCP server to Claude Code (~/.claude/settings.json):"
 echo "   or Claude Desktop (~/Library/Application Support/Claude/claude_desktop_config.json)"
 echo ""
 echo '   "mcpServers": {'
-echo '     "gmail": {'
+echo '     "google-workspace": {'
 echo "       \"command\": \"$PYTHON_PATH\","
 echo "       \"args\": [\"$SERVER_PATH\"]"
 echo '     }'
 echo '   }'
 echo ""
-echo "5. Restart Claude — the Gmail tools will appear automatically."
+echo "5. Restart Claude — the Gmail, Calendar, and Drive tools will appear automatically."

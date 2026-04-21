@@ -1,6 +1,8 @@
-# Gmail & Calendar Multi-Account MCP Server
+# Google Workspace Multi-Account MCP Server
 
-A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects multiple Gmail accounts and Google Calendars to Claude Desktop. Runs entirely on your machine — no cloud hosting required.
+A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects multiple Google Workspace accounts — **Gmail, Calendar, and Drive** — to Claude Desktop and Claude Code. Runs entirely on your machine — no cloud hosting required.
+
+> Forked from [DiegoMaldonadoRosas/gmail-mcp](https://github.com/DiegoMaldonadoRosas/gmail-mcp) with Google Drive support added.
 
 ## Features
 
@@ -10,21 +12,22 @@ A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server t
 - **Send & draft** — compose and send emails, or save drafts, from any account
 - **Label management** — list labels, mark as read/unread, star messages
 - **Google Calendar** — list calendars, browse upcoming events, search by keyword
+- **Google Drive** — search, read, upload, update, organize, and trash files across all accounts
 
 ## Requirements
 
 - macOS (tested on macOS 14+)
 - Python 3.11+
-- A Google Cloud project with the Gmail API and Calendar API enabled (free)
-- Claude Desktop
+- A Google Cloud project with the **Gmail API**, **Google Calendar API**, and **Google Drive API** enabled (free)
+- Claude Desktop or Claude Code
 
 ## Installation
 
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/DiegoMaldonadoRosas/gmail-mcp.git
-cd gmail-mcp
+git clone https://github.com/paulgenbergco/google-workspace-mcp.git
+cd google-workspace-mcp
 ```
 
 ### 2. Run the setup script
@@ -66,11 +69,11 @@ The account keys (`personal`, `work`) are the names you'll use when asking Claud
 ### 4. Get Google OAuth credentials
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a project and enable both the **Gmail API** and the **Google Calendar API**
-3. Go to **APIs & Services → Credentials → + Create Credentials → OAuth 2.0 Client ID**
+2. Create a project and enable the **Gmail API**, **Google Calendar API**, and **Google Drive API**
+3. Go to **APIs & Services > Credentials > + Create Credentials > OAuth 2.0 Client ID**
 4. Choose **Desktop app** as the application type
 5. Download the JSON file and save it as `credentials/client_secret.json`
-6. Go to **APIs & Services → OAuth consent screen → Test users** and add every email address you configured in `config.json`
+6. Go to **APIs & Services > OAuth consent screen > Test users** and add every email address you configured in `config.json`
 
 ### 5. Authenticate your accounts
 
@@ -81,26 +84,39 @@ python setup_auth.py
 
 A browser window will open for each account. Sign in with the correct Google account. Tokens are saved locally and refreshed automatically — you only need to do this once per account.
 
-> **Note:** If you previously authenticated for Gmail only, you must re-run `setup_auth.py` after adding Calendar support so the tokens include the new Calendar permissions.
+> **Note:** If you previously authenticated for Gmail/Calendar only, you must re-run `setup_auth.py` after upgrading so the tokens include the new Drive permissions.
 
-### 6. Add the server to Claude Desktop
+### 6. Add the server to Claude
 
-Open `~/Library/Application Support/Claude/claude_desktop_config.json` and add:
+**Claude Code** (`~/.claude/settings.json`):
 
 ```json
 {
   "mcpServers": {
-    "gmail": {
-      "command": "/absolute/path/to/gmail-mcp/.venv/bin/python",
-      "args": ["/absolute/path/to/gmail-mcp/server.py"]
+    "google-workspace": {
+      "command": "/absolute/path/to/google-workspace-mcp/.venv/bin/python",
+      "args": ["/absolute/path/to/google-workspace-mcp/server.py"]
     }
   }
 }
 ```
 
-Replace `/absolute/path/to/gmail-mcp` with the actual path where you cloned the repo.
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
-### 7. Restart Claude Desktop
+```json
+{
+  "mcpServers": {
+    "google-workspace": {
+      "command": "/absolute/path/to/google-workspace-mcp/.venv/bin/python",
+      "args": ["/absolute/path/to/google-workspace-mcp/server.py"]
+    }
+  }
+}
+```
+
+Replace `/absolute/path/to/google-workspace-mcp` with the actual path where you cloned the repo.
+
+### 7. Restart Claude
 
 All tools will appear automatically.
 
@@ -131,6 +147,21 @@ All tools will appear automatically.
 | `calendar_search` | Search events by keyword (title, description, location, attendees) |
 | `calendar_get_event` | Get full details of a specific event |
 
+### Google Drive
+
+| Tool | Description |
+|------|-------------|
+| `drive_search` | Search files using Drive query syntax (one or all accounts) |
+| `drive_list_recent` | List recently modified files |
+| `drive_get_file` | Get detailed metadata for a specific file |
+| `drive_read_content` | Read file content (exports Docs/Sheets/Slides to text) |
+| `drive_upload` | Upload a new file with text content |
+| `drive_update` | Update an existing file's content |
+| `drive_create_folder` | Create a new folder |
+| `drive_move` | Move a file or folder to a different folder |
+| `drive_rename` | Rename a file or folder |
+| `drive_trash` | Move a file or folder to trash |
+
 ## Usage Examples
 
 Once connected, you can ask Claude things like:
@@ -148,12 +179,19 @@ Once connected, you can ask Claude things like:
 - *"List all my calendars in my work account"*
 - *"What are the details of tomorrow's standup?"*
 
+**Drive:**
+- *"Search for files named 'quarterly report' across all my accounts"*
+- *"Read the content of the budget spreadsheet in my work account"*
+- *"Upload these meeting notes to my work Drive"*
+- *"Create a new folder called 'Q2 Reports' in my work account"*
+- *"What files were recently modified in my personal Drive?"*
+
 ## Adding a New Account
 
 1. Add the account to `config.json`
 2. Add the email as a Test User in Google Cloud Console (OAuth consent screen)
 3. Run `python setup_auth.py` — it will only prompt for the new account
-4. Restart Claude Desktop
+4. Restart Claude
 
 ## Security
 
@@ -165,11 +203,12 @@ Once connected, you can ask Claude things like:
 ## Project Structure
 
 ```
-gmail-mcp/
-├── server.py           # MCP server — exposes 15 tools to Claude
+google-workspace-mcp/
+├── server.py           # MCP server — exposes 25 tools to Claude
 ├── auth.py             # OAuth2 token manager (per account)
 ├── gmail.py            # Gmail API wrapper
 ├── gcalendar.py        # Google Calendar API wrapper
+├── gdrive.py           # Google Drive API wrapper
 ├── config.py           # Configuration loader
 ├── setup_auth.py       # One-time authentication script
 ├── setup.sh            # First-time installer

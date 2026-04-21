@@ -89,6 +89,154 @@ class CalendarService:
         ).execute()
         return self._parse_event(event)
 
+    # ------------------------------------------------------------------ write
+
+    def create_event(
+        self,
+        summary: str,
+        start: str,
+        end: str,
+        calendar_id: str = "primary",
+        description: str = "",
+        location: str = "",
+        attendees: Optional[List[str]] = None,
+        all_day: bool = False,
+        add_meet: bool = False,
+    ) -> Dict[str, Any]:
+        """Create a calendar event."""
+        if all_day:
+            event_body: Dict[str, Any] = {
+                "summary": summary,
+                "start": {"date": start},
+                "end": {"date": end},
+            }
+        else:
+            event_body = {
+                "summary": summary,
+                "start": {"dateTime": start},
+                "end": {"dateTime": end},
+            }
+
+        if description:
+            event_body["description"] = description
+        if location:
+            event_body["location"] = location
+        if attendees:
+            event_body["attendees"] = [{"email": e} for e in attendees]
+        if add_meet:
+            event_body["conferenceData"] = {
+                "createRequest": {"requestId": f"mcp-{summary[:20]}"}
+            }
+
+        params: Dict[str, Any] = {
+            "calendarId": calendar_id,
+            "body": event_body,
+            "sendUpdates": "all",
+        }
+        if add_meet:
+            params["conferenceDataVersion"] = 1
+
+        result = self.service.events().insert(**params).execute()
+        return self._parse_event(result)
+
+    def update_event(
+        self,
+        event_id: str,
+        calendar_id: str = "primary",
+        summary: Optional[str] = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        description: Optional[str] = None,
+        location: Optional[str] = None,
+        attendees: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Update fields on an existing event."""
+        existing = self.service.events().get(
+            calendarId=calendar_id, eventId=event_id
+        ).execute()
+
+        if summary is not None:
+            existing["summary"] = summary
+        if description is not None:
+            existing["description"] = description
+        if location is not None:
+            existing["location"] = location
+        if start is not None:
+            if "date" in existing.get("start", {}):
+                existing["start"] = {"date": start}
+            else:
+                existing["start"] = {"dateTime": start}
+        if end is not None:
+            if "date" in existing.get("end", {}):
+                existing["end"] = {"date": end}
+            else:
+                existing["end"] = {"dateTime": end}
+        if attendees is not None:
+            existing["attendees"] = [{"email": e} for e in attendees]
+
+        result = self.service.events().update(
+            calendarId=calendar_id, eventId=event_id, body=existing, sendUpdates="all"
+        ).execute()
+        return self._parse_event(result)
+
+    def delete_event(self, event_id: str, calendar_id: str = "primary") -> Dict[str, Any]:
+        """Delete a calendar event."""
+        self.service.events().delete(
+            calendarId=calendar_id, eventId=event_id, sendUpdates="all"
+        ).execute()
+        return {"deleted": True, "event_id": event_id}
+
+    def respond_to_event(
+        self,
+        event_id: str,
+        response: str,
+        calendar_id: str = "primary",
+    ) -> Dict[str, Any]:
+        """Respond to an event invitation (accepted, declined, tentative)."""
+        event = self.service.events().get(
+            calendarId=calendar_id, eventId=event_id
+        ).execute()
+
+        for attendee in event.get("attendees", []):
+            if attendee.get("self"):
+                attendee["responseStatus"] = response
+                break
+
+        result = self.service.events().update(
+            calendarId=calendar_id, eventId=event_id, body=event, sendUpdates="all"
+        ).execute()
+        return self._parse_event(result)
+
+    def find_free_time(
+        self,
+        emails: List[str],
+        time_min: str,
+        time_max: str,
+    ) -> Dict[str, Any]:
+        """Query free/busy information for a list of people."""
+        body = {
+            "timeMin": time_min,
+            "timeMax": time_max,
+            "items": [{"id": e} for e in emails],
+        }
+        result = self.service.freebusy().query(body=body).execute()
+
+        calendars = {}
+        for email, info in result.get("calendars", {}).items():
+            calendars[email] = {
+                "busy": [
+                    {"start": b["start"], "end": b["end"]}
+                    for b in info.get("busy", [])
+                ],
+                "errors": info.get("errors", []),
+            }
+
+        return {
+            "timeMin": result.get("timeMin", time_min),
+            "timeMax": result.get("timeMax", time_max),
+            "calendars": calendars,
+        }
+
     # ------------------------------------------------------------------ internals
 
     def _parse_event(self, event: Dict[str, Any]) -> Dict[str, Any]:

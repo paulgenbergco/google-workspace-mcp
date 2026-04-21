@@ -121,6 +121,76 @@ class GmailService:
 
         return drafts
 
+    # ------------------------------------------------------------------ send draft / attachments
+
+    def send_draft(self, draft_id: str) -> Dict[str, Any]:
+        """Send an existing draft."""
+        result = self.service.users().drafts().send(
+            userId="me", body={"id": draft_id}
+        ).execute()
+        msg = result.get("message", result)
+        return {
+            "status": "sent",
+            "message_id": msg.get("id", ""),
+            "thread_id": msg.get("threadId", ""),
+        }
+
+    def download_attachment(self, message_id: str, attachment_id: str) -> Dict[str, Any]:
+        """Download an attachment from a message."""
+        msg = self._get_raw_message(message_id, format="metadata")
+        payload = msg.get("payload", {})
+
+        # Find the attachment part to get filename and mime type
+        filename = ""
+        mime_type = ""
+        for part in self._iter_parts(payload):
+            body = part.get("body", {})
+            if body.get("attachmentId") == attachment_id:
+                filename = part.get("filename", "")
+                mime_type = part.get("mimeType", "")
+                break
+
+        att = self.service.users().messages().attachments().get(
+            userId="me", messageId=message_id, id=attachment_id
+        ).execute()
+
+        data = att.get("data", "")
+        decoded = base64.urlsafe_b64decode(data.encode()).decode("utf-8", errors="replace")
+
+        return {
+            "attachment_id": attachment_id,
+            "message_id": message_id,
+            "filename": filename,
+            "mimeType": mime_type,
+            "size": att.get("size", 0),
+            "content": decoded,
+        }
+
+    def list_attachments(self, message_id: str) -> List[Dict[str, Any]]:
+        """List all attachments on a message."""
+        msg = self._get_raw_message(message_id, format="full")
+        payload = msg.get("payload", {})
+        attachments = []
+
+        for part in self._iter_parts(payload):
+            body = part.get("body", {})
+            if body.get("attachmentId"):
+                attachments.append({
+                    "attachment_id": body["attachmentId"],
+                    "filename": part.get("filename", ""),
+                    "mimeType": part.get("mimeType", ""),
+                    "size": body.get("size", 0),
+                })
+
+        return attachments
+
+    @staticmethod
+    def _iter_parts(payload: Dict[str, Any]):
+        """Recursively yield all MIME parts."""
+        yield payload
+        for part in payload.get("parts", []):
+            yield from GmailService._iter_parts(part)
+
     # ------------------------------------------------------------------ labels
 
     def list_labels(self) -> List[Dict[str, Any]]:

@@ -191,3 +191,307 @@ class SheetsService:
             "sheetId": props.get("sheetId"),
             "title": props.get("title", title),
         }
+
+    # ------------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _hex_to_rgb(hex_color: str) -> Dict[str, float]:
+        """Convert '#RRGGBB' or 'RRGGBB' to a color dict with floats 0..1."""
+        h = hex_color.lstrip("#")
+        r = int(h[0:2], 16)
+        g = int(h[2:4], 16)
+        b = int(h[4:6], 16)
+        return {"red": r / 255, "green": g / 255, "blue": b / 255}
+
+    @staticmethod
+    def _grid_range(
+        sheet_id: int,
+        start_row: Optional[int],
+        end_row: Optional[int],
+        start_col: Optional[int],
+        end_col: Optional[int],
+    ) -> Dict[str, Any]:
+        """Build a GridRange (0-based, end exclusive). None bounds are omitted."""
+        grid: Dict[str, Any] = {"sheetId": sheet_id}
+        if start_row is not None:
+            grid["startRowIndex"] = start_row
+        if end_row is not None:
+            grid["endRowIndex"] = end_row
+        if start_col is not None:
+            grid["startColumnIndex"] = start_col
+        if end_col is not None:
+            grid["endColumnIndex"] = end_col
+        return grid
+
+    # ------------------------------------------------------------------ batch / format
+
+    def batch_update(
+        self,
+        spreadsheet_id: str,
+        requests: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Raw batchUpdate passthrough for arbitrary requests."""
+        result = self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": requests},
+        ).execute()
+
+        return {
+            "spreadsheetId": result.get("spreadsheetId", spreadsheet_id),
+            "replies": result.get("replies", []),
+        }
+
+    def format_cells(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        start_row: int,
+        end_row: int,
+        start_col: int,
+        end_col: int,
+        bold: Optional[bool] = None,
+        italic: Optional[bool] = None,
+        font_size: Optional[int] = None,
+        background_color: Optional[str] = None,
+        text_color: Optional[str] = None,
+        number_format: Optional[str] = None,
+        horizontal_alignment: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Apply cell formatting to a range via a repeatCell request."""
+        cell_format: Dict[str, Any] = {}
+        text_format: Dict[str, Any] = {}
+        fields: List[str] = []
+
+        if bold is not None:
+            text_format["bold"] = bold
+            fields.append("userEnteredFormat.textFormat.bold")
+        if italic is not None:
+            text_format["italic"] = italic
+            fields.append("userEnteredFormat.textFormat.italic")
+        if font_size is not None:
+            text_format["fontSize"] = font_size
+            fields.append("userEnteredFormat.textFormat.fontSize")
+        if text_color is not None:
+            text_format["foregroundColor"] = self._hex_to_rgb(text_color)
+            fields.append("userEnteredFormat.textFormat.foregroundColor")
+
+        if text_format:
+            cell_format["textFormat"] = text_format
+
+        if background_color is not None:
+            cell_format["backgroundColor"] = self._hex_to_rgb(background_color)
+            fields.append("userEnteredFormat.backgroundColor")
+
+        if number_format is not None:
+            number_types = {
+                "CURRENCY",
+                "PERCENT",
+                "DATE",
+                "TIME",
+                "DATE_TIME",
+                "SCIENTIFIC",
+            }
+            if number_format in number_types:
+                cell_format["numberFormat"] = {"type": number_format}
+            else:
+                cell_format["numberFormat"] = {
+                    "type": "NUMBER",
+                    "pattern": number_format,
+                }
+            fields.append("userEnteredFormat.numberFormat")
+
+        if horizontal_alignment is not None:
+            cell_format["horizontalAlignment"] = horizontal_alignment
+            fields.append("userEnteredFormat.horizontalAlignment")
+
+        grid_range = self._grid_range(
+            sheet_id, start_row, end_row, start_col, end_col
+        )
+        request = {
+            "repeatCell": {
+                "range": grid_range,
+                "cell": {"userEnteredFormat": cell_format},
+                "fields": ",".join(fields),
+            }
+        }
+
+        self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [request]},
+        ).execute()
+
+        return {
+            "spreadsheetId": spreadsheet_id,
+            "formatted": grid_range,
+        }
+
+    def clear_range(self, spreadsheet_id: str, range: str) -> Dict[str, Any]:
+        """Clear values from a range using A1 notation."""
+        result = self.service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range=range,
+            body={},
+        ).execute()
+
+        return {
+            "spreadsheetId": result.get("spreadsheetId", spreadsheet_id),
+            "clearedRange": result.get("clearedRange", range),
+        }
+
+    def delete_sheet(self, spreadsheet_id: str, sheet_id: int) -> Dict[str, Any]:
+        """Delete a sheet/tab by numeric sheetId."""
+        self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{"deleteSheet": {"sheetId": sheet_id}}]},
+        ).execute()
+
+        return {
+            "spreadsheetId": spreadsheet_id,
+            "deletedSheetId": sheet_id,
+        }
+
+    def rename_sheet(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        title: str,
+    ) -> Dict[str, Any]:
+        """Rename a sheet/tab by numeric sheetId."""
+        self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": sheet_id,
+                                "title": title,
+                            },
+                            "fields": "title",
+                        }
+                    }
+                ]
+            },
+        ).execute()
+
+        return {
+            "spreadsheetId": spreadsheet_id,
+            "sheetId": sheet_id,
+            "title": title,
+        }
+
+    def duplicate_sheet(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        new_title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Duplicate a sheet/tab by numeric sheetId."""
+        duplicate: Dict[str, Any] = {"sourceSheetId": sheet_id}
+        if new_title is not None:
+            duplicate["newSheetName"] = new_title
+
+        result = self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{"duplicateSheet": duplicate}]},
+        ).execute()
+
+        reply = result.get("replies", [{}])[0]
+        props = reply.get("duplicateSheet", {}).get("properties", {})
+        return {
+            "spreadsheetId": spreadsheet_id,
+            "sheetId": props.get("sheetId"),
+            "title": props.get("title", new_title or ""),
+        }
+
+    def batch_get(
+        self,
+        spreadsheet_id: str,
+        ranges: List[str],
+        value_render: str = "FORMATTED_VALUE",
+    ) -> Dict[str, Any]:
+        """Read multiple ranges in one call using A1 notation."""
+        result = self.service.spreadsheets().values().batchGet(
+            spreadsheetId=spreadsheet_id,
+            ranges=ranges,
+            valueRenderOption=value_render,
+        ).execute()
+
+        value_ranges = [
+            {
+                "range": vr.get("range", ""),
+                "values": vr.get("values", []),
+            }
+            for vr in result.get("valueRanges", [])
+        ]
+        return {
+            "spreadsheetId": result.get("spreadsheetId", spreadsheet_id),
+            "valueRanges": value_ranges,
+        }
+
+    def freeze(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        rows: int = 0,
+        cols: int = 0,
+    ) -> Dict[str, Any]:
+        """Freeze the given number of rows and columns on a sheet."""
+        self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": sheet_id,
+                                "gridProperties": {
+                                    "frozenRowCount": rows,
+                                    "frozenColumnCount": cols,
+                                },
+                            },
+                            "fields": (
+                                "gridProperties.frozenRowCount,"
+                                "gridProperties.frozenColumnCount"
+                            ),
+                        }
+                    }
+                ]
+            },
+        ).execute()
+
+        return {
+            "spreadsheetId": spreadsheet_id,
+            "sheetId": sheet_id,
+            "frozenRowCount": rows,
+            "frozenColumnCount": cols,
+        }
+
+    def merge_cells(
+        self,
+        spreadsheet_id: str,
+        sheet_id: int,
+        start_row: int,
+        end_row: int,
+        start_col: int,
+        end_col: int,
+        merge_type: str = "MERGE_ALL",
+    ) -> Dict[str, Any]:
+        """Merge a range of cells."""
+        grid_range = self._grid_range(
+            sheet_id, start_row, end_row, start_col, end_col
+        )
+        self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={
+                "requests": [
+                    {"mergeCells": {"range": grid_range, "mergeType": merge_type}}
+                ]
+            },
+        ).execute()
+
+        return {
+            "spreadsheetId": spreadsheet_id,
+            "merged": grid_range,
+            "mergeType": merge_type,
+        }

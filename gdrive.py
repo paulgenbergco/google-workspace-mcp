@@ -1,9 +1,11 @@
+import base64
 import io
+import mimetypes
 from typing import Any, Dict, List, Optional
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
 
 # Google Workspace mimeTypes → text-friendly export formats
@@ -77,8 +79,19 @@ class DriveService:
         ).execute()
         return self._parse_file(f)
 
-    def read_content(self, file_id: str) -> Dict[str, Any]:
-        """Read file content. Exports Workspace files to text-friendly formats."""
+    def read_content(
+        self,
+        file_id: str,
+        save_path: Optional[str] = None,
+        export_mime: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Read file content.
+
+        Workspace files are exported (using ``export_mime`` if given, else the
+        ``_EXPORT_MAP`` default, else PDF). Non-Workspace text files are read as
+        UTF-8. Everything else is treated as binary: saved to ``save_path`` if
+        provided, otherwise returned as base64 (guarded for very large files).
+        """
         meta = self.service.files().get(
             fileId=file_id,
             fields=f"{_FILE_FIELDS}",
@@ -86,49 +99,76 @@ class DriveService:
         ).execute()
 
         mime_type = meta.get("mimeType", "")
-        export_config = _EXPORT_MAP.get(mime_type)
+        is_workspace = (
+            mime_type in _EXPORT_MAP
+            or mime_type.startswith("application/vnd.google-apps")
+        )
 
-        if export_config:
-            export_mime, label = export_config
-            res = self.service.files().export(
-                fileId=file_id, mimeType=export_mime
+        result: Dict[str, Any] = {**self._parse_file(meta)}
+
+        if is_workspace:
+            if export_mime:
+                effective_mime = export_mime
+            elif mime_type in _EXPORT_MAP:
+                effective_mime = _EXPORT_MAP[mime_type][0]
+            else:
+                effective_mime = "application/pdf"
+
+            raw = self.service.files().export(
+                fileId=file_id, mimeType=effective_mime
             ).execute()
-            content = res if isinstance(res, str) else res.decode("utf-8", errors="replace")
-        elif mime_type.startswith("text/") or mime_type == "application/json":
-            res = self.service.files().get_media(
+            if isinstance(raw, str):
+                raw = raw.encode("utf-8")
+
+            if self._is_text_mime(effective_mime):
+                result["content"] = raw.decode("utf-8", errors="replace")
+                return result
+            return self._binary_result(result, raw, meta, effective_mime, save_path)
+
+        if mime_type.startswith("text/") or mime_type == "application/json":
+            raw = self.service.files().get_media(
                 fileId=file_id, supportsAllDrives=True
             ).execute()
-            content = res if isinstance(res, str) else res.decode("utf-8", errors="replace")
-        else:
-            content = (
-                f"[Binary file: {meta.get('name')} ({mime_type}, "
-                f"{meta.get('size', 'unknown')} bytes). Use webViewLink to open.]"
-            )
+            content = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
+            result["content"] = content
+            return result
 
-        return {
-            **self._parse_file(meta),
-            "content": content,
-        }
+        raw = self.service.files().get_media(
+            fileId=file_id, supportsAllDrives=True
+        ).execute()
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        return self._binary_result(result, raw, meta, mime_type, save_path)
 
     # ------------------------------------------------------------------ write
 
     def upload_file(
         self,
         name: str,
-        content: str,
+        content: str = "",
         mime_type: str = "text/plain",
         parent_folder_id: Optional[str] = None,
+        source_path: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Upload/create a new file with text content."""
+        """Upload/create a new file from text content or a local file."""
         metadata: Dict[str, Any] = {"name": name}
         if parent_folder_id:
             metadata["parents"] = [parent_folder_id]
 
-        media = MediaIoBaseUpload(
-            io.BytesIO(content.encode("utf-8")),
-            mimetype=mime_type,
-            resumable=False,
-        )
+        if source_path:
+            if mime_type == "text/plain":
+                guessed, _ = mimetypes.guess_type(source_path)
+                if guessed:
+                    mime_type = guessed
+            media = MediaFileUpload(
+                source_path, mimetype=mime_type, resumable=True
+            )
+        else:
+            media = MediaIoBaseUpload(
+                io.BytesIO(content.encode("utf-8")),
+                mimetype=mime_type,
+                resumable=False,
+            )
 
         f = self.service.files().create(
             body=metadata,
@@ -212,7 +252,175 @@ class DriveService:
 
         return self._parse_file(f)
 
+    def untrash_file(self, file_id: str) -> Dict[str, Any]:
+        """Restore a file from trash."""
+        f = self.service.files().update(
+            fileId=file_id,
+            body={"trashed": False},
+            fields=_FILE_FIELDS,
+            supportsAllDrives=True,
+        ).execute()
+
+        return self._parse_file(f)
+
+    def copy_file(
+        self,
+        file_id: str,
+        name: Optional[str] = None,
+        parent_folder_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a copy of a file."""
+        body: Dict[str, Any] = {}
+        if name:
+            body["name"] = name
+        if parent_folder_id:
+            body["parents"] = [parent_folder_id]
+
+        f = self.service.files().copy(
+            fileId=file_id,
+            body=body,
+            fields=_FILE_FIELDS,
+            supportsAllDrives=True,
+        ).execute()
+
+        return self._parse_file(f)
+
+    def export_file(
+        self,
+        file_id: str,
+        mime_type: str,
+        save_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Export a Workspace file to the given mimeType."""
+        raw = self.service.files().export(
+            fileId=file_id, mimeType=mime_type
+        ).execute()
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+
+        if save_path:
+            with open(save_path, "wb") as fh:
+                fh.write(raw)
+            return {"file_id": file_id, "mimeType": mime_type, "saved_to": save_path}
+
+        if len(raw) > 10_000_000:
+            return {
+                "file_id": file_id,
+                "mimeType": mime_type,
+                "data_base64": None,
+                "note": (
+                    f"Export is {len(raw)} bytes (>10MB). Pass save_path to write "
+                    "it to disk instead of returning base64."
+                ),
+            }
+
+        return {
+            "file_id": file_id,
+            "mimeType": mime_type,
+            "data_base64": base64.b64encode(raw).decode(),
+        }
+
+    # ------------------------------------------------------------------ sharing / permissions
+
+    def share_file(
+        self,
+        file_id: str,
+        role: str = "reader",
+        type: str = "user",
+        email: Optional[str] = None,
+        domain: Optional[str] = None,
+        notify: bool = True,
+        message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Grant a permission on a file."""
+        perm: Dict[str, Any] = {"role": role, "type": type}
+        if type in ("user", "group"):
+            perm["emailAddress"] = email
+        elif type == "domain":
+            perm["domain"] = domain
+
+        # sendNotificationEmail is only valid for user/group grants.
+        send_notification = notify if type in ("user", "group") else False
+
+        result = self.service.permissions().create(
+            fileId=file_id,
+            body=perm,
+            sendNotificationEmail=send_notification,
+            emailMessage=message if message else None,
+            supportsAllDrives=True,
+            fields="id,type,role,emailAddress,domain",
+        ).execute()
+
+        return {"file_id": file_id, "permission": result}
+
+    def list_permissions(self, file_id: str) -> Dict[str, Any]:
+        """List all permissions on a file."""
+        result = self.service.permissions().list(
+            fileId=file_id,
+            fields="permissions(id,type,role,emailAddress,domain,displayName)",
+            supportsAllDrives=True,
+        ).execute()
+
+        return {"file_id": file_id, "permissions": result.get("permissions", [])}
+
+    def remove_permission(self, file_id: str, permission_id: str) -> Dict[str, Any]:
+        """Remove a permission from a file."""
+        self.service.permissions().delete(
+            fileId=file_id,
+            permissionId=permission_id,
+            supportsAllDrives=True,
+        ).execute()
+
+        return {"removed": True, "file_id": file_id, "permission_id": permission_id}
+
     # ------------------------------------------------------------------ internals
+
+    @staticmethod
+    def _is_text_mime(mime_type: str) -> bool:
+        """Whether a mimeType should be decoded as UTF-8 text."""
+        return (
+            mime_type.startswith("text/")
+            or mime_type in ("application/csv", "text/csv")
+            or mime_type in ("application/json", "text/json")
+            or mime_type in ("application/xhtml+xml", "text/html")
+            or mime_type.endswith("+json")
+            or mime_type.endswith("+xml")
+            or "csv" in mime_type
+            or "html" in mime_type
+        )
+
+    def _binary_result(
+        self,
+        result: Dict[str, Any],
+        raw: bytes,
+        meta: Dict[str, Any],
+        mime_type: str,
+        save_path: Optional[str],
+    ) -> Dict[str, Any]:
+        """Populate a read result for binary content (save, base64, or note)."""
+        if save_path:
+            with open(save_path, "wb") as fh:
+                fh.write(raw)
+            result["content"] = (
+                f"[Binary file: {meta.get('name')} ({mime_type}, "
+                f"{len(raw)} bytes) saved to disk.]"
+            )
+            result["saved_to"] = save_path
+            return result
+
+        if len(raw) > 10_000_000:
+            result["content"] = (
+                f"[Binary file: {meta.get('name')} ({mime_type}, {len(raw)} bytes) "
+                "is too large to return inline. Pass save_path to write it to disk.]"
+            )
+            return result
+
+        result["content"] = (
+            f"[Binary file: {meta.get('name')} ({mime_type}, {len(raw)} bytes). "
+            "Content returned as base64 in data_base64.]"
+        )
+        result["data_base64"] = base64.b64encode(raw).decode()
+        return result
 
     def _parse_file(self, f: Dict[str, Any]) -> Dict[str, Any]:
         owners = [

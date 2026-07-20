@@ -1,19 +1,19 @@
 # Google Workspace Multi-Account MCP Server
 
-A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects multiple Google Workspace accounts — **Gmail, Calendar, Drive, Contacts, Docs, Sheets, and Slides** — to Claude Desktop and Claude Code. 57 tools, full read+write, runs entirely on your machine.
+A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects multiple Google Workspace accounts — **Gmail, Calendar, Drive, Contacts, Docs, Sheets, and Slides** — to Claude Desktop and Claude Code. 109 tools, full read+write, runs entirely on your machine.
 
 > Forked from [DiegoMaldonadoRosas/gmail-mcp](https://github.com/DiegoMaldonadoRosas/gmail-mcp) with Drive, Contacts, Docs, Sheets, and Slides support added.
 
 ## Features
 
 - **Multiple accounts** — connect as many Gmail or Google Workspace accounts as you need
-- **Gmail** — search (cross-account), read messages/threads, send, draft, labels, attachments, trash
-- **Google Calendar** — list, search, create/update/delete events, RSVP, find free time
-- **Google Drive** — search (cross-account), read/upload/update files, folders, move, rename, trash
-- **Google Contacts** — list, search, create, update, delete contacts
-- **Google Docs** — read text, create, insert/replace text, format (bold, italic, headings, links)
-- **Google Sheets** — read data (CSV/JSON/raw), create, write/append ranges, manage tabs
-- **Google Slides** — read text/metadata, create, add slides, find/replace and insert text
+- **Gmail** — cross-account search, read, send (HTML + attachments), threaded reply/reply-all, forward, drafts, label CRUD, batch label ops, mark read/unread, trash/untrash, filters, vacation responder
+- **Google Calendar** — list/search/create/update (patch) events with recurrence (RRULE), reminders, Meet links; RSVP, quick-add, move between calendars, list recurring instances, free/busy + suggested slots, create/delete calendars
+- **Google Drive** — cross-account search, read (binary-safe), upload from text or local file, export (PDF/etc.), copy, share & manage permissions, folders, move, rename, trash/untrash
+- **Google Contacts** — list, search, create/update with multiple emails/phones + notes/birthday/URLs, delete, "other contacts", contact groups
+- **Google Docs** — tab-aware read/write, create, insert/replace/format text, **tables, inline images, bullet/numbered lists, page breaks**, raw batchUpdate
+- **Google Sheets** — read (CSV/JSON/raw, batch multi-range), create, write/append, **cell formatting, number formats, freeze, merge**, clear, add/delete/rename/duplicate sheets, raw batchUpdate
+- **Google Slides** — read text/metadata, create, add slides, **create text boxes & images, format text, speaker notes, delete/duplicate objects**, find/replace, raw batchUpdate
 
 ## Requirements
 
@@ -77,7 +77,7 @@ source .venv/bin/activate
 python setup_auth.py
 ```
 
-> **Note:** If upgrading from a previous version, re-run `setup_auth.py` to grant newly added scopes (Calendar write, Contacts, Docs, Sheets, Slides).
+> **Note:** If upgrading from a previous version, re-run `setup_auth.py` for **every account** to grant the newly added scopes — `gmail.labels`, `gmail.settings.basic` (filters + vacation responder), and `contacts.other.readonly` ("other contacts"). Existing tools keep working without it, but these specific features will fail until each account is re-authenticated.
 
 ### 6. Add the server to Claude
 
@@ -96,11 +96,11 @@ python setup_auth.py
 
 ### 7. Restart Claude
 
-All 57 tools will appear automatically.
+All 109 tools will appear automatically.
 
-## Available Tools (57)
+## Available Tools (109)
 
-### Gmail (14 tools)
+### Gmail (28 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -109,17 +109,31 @@ All 57 tools will appear automatically.
 | `gmail_search` | Search emails using Gmail query syntax (one or all accounts) |
 | `gmail_read_message` | Read the full content of a message |
 | `gmail_read_thread` | Read all messages in a thread |
-| `gmail_send` | Send an email from a specific account |
-| `gmail_create_draft` | Save an email as a draft |
+| `gmail_send` | Send an email (plain + HTML body, attachments, threadId) |
+| `gmail_reply` | Reply / reply-all, preserving the thread |
+| `gmail_forward` | Forward a message, quoting the original |
+| `gmail_create_draft` | Save an email as a draft (HTML + attachments) |
 | `gmail_send_draft` | Send an existing draft |
 | `gmail_list_drafts` | List drafts in an account |
 | `gmail_list_labels` | List all labels and folders |
-| `gmail_modify_labels` | Add or remove labels (mark read/unread, star, etc.) |
+| `gmail_create_label` | Create a new label |
+| `gmail_update_label` | Rename or change visibility of a label |
+| `gmail_delete_label` | Delete a label |
+| `gmail_modify_labels` | Add or remove labels on a message |
+| `gmail_batch_modify` | Add/remove labels on many messages at once |
+| `gmail_modify_thread_labels` | Add/remove labels on a whole thread |
+| `gmail_mark_read` | Mark a message as read |
+| `gmail_mark_unread` | Mark a message as unread |
 | `gmail_trash` | Move a message to trash |
+| `gmail_untrash` | Restore a message from trash |
 | `gmail_list_attachments` | List all attachments on a message |
-| `gmail_download_attachment` | Download attachment content |
+| `gmail_download_attachment` | Download attachment content (binary-safe; save to file) |
+| `gmail_list_filters` | List filters (rules) |
+| `gmail_create_filter` | Create a filter |
+| `gmail_delete_filter` | Delete a filter |
+| `gmail_get_vacation` / `gmail_set_vacation` | Read / set the vacation responder |
 
-### Google Calendar (9 tools)
+### Google Calendar (15 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -127,61 +141,91 @@ All 57 tools will appear automatically.
 | `calendar_list_events` | List upcoming events, optionally filtered by date range |
 | `calendar_search` | Search events by keyword |
 | `calendar_get_event` | Get full details of a specific event |
-| `calendar_create_event` | Create a new event (with attendees, Meet link, all-day support) |
-| `calendar_update_event` | Update fields on an existing event |
+| `calendar_create_event` | Create an event (attendees, Meet, all-day, recurrence, reminders) |
+| `calendar_update_event` | Patch fields on an event (incl. recurrence, reminders) |
 | `calendar_delete_event` | Delete an event |
 | `calendar_respond` | Respond to an invitation (accept, decline, tentative) |
+| `calendar_quick_add` | Create an event from natural language |
+| `calendar_move_event` | Move an event to another calendar |
+| `calendar_list_instances` | List instances of a recurring event |
 | `calendar_find_free_time` | Query free/busy for a list of people |
+| `calendar_suggest_slots` | Suggest open meeting slots across attendees |
+| `calendar_create_calendar` | Create a new secondary calendar |
+| `calendar_delete_calendar` | Delete a secondary calendar |
 
-### Google Drive (10 tools)
+### Google Drive (16 tools)
 
 | Tool | Description |
 |------|-------------|
 | `drive_search` | Search files using Drive query syntax (one or all accounts) |
 | `drive_list_recent` | List recently modified files |
 | `drive_get_file` | Get detailed metadata for a specific file |
-| `drive_read_content` | Read file content (exports Docs/Sheets/Slides to text) |
-| `drive_upload` | Upload a new file with text content |
+| `drive_read_content` | Read file content (exports Workspace files; binary-safe) |
+| `drive_upload` | Upload a new file from text or a local file path |
 | `drive_update` | Update an existing file's content |
+| `drive_export` | Export a Workspace file (PDF, CSV, etc.) |
+| `drive_copy` | Copy a file |
+| `drive_share` | Share a file/folder (grant a permission) |
+| `drive_list_permissions` | List who has access |
+| `drive_remove_permission` | Revoke an access grant |
 | `drive_create_folder` | Create a new folder |
 | `drive_move` | Move a file or folder to a different folder |
 | `drive_rename` | Rename a file or folder |
 | `drive_trash` | Move a file or folder to trash |
+| `drive_untrash` | Restore a file or folder from trash |
 
-### Google Contacts (6 tools)
+### Google Contacts (10 tools)
 
 | Tool | Description |
 |------|-------------|
 | `people_list_contacts` | List contacts, ordered by most recently modified |
 | `people_search` | Search contacts by name, email, phone, etc. |
 | `people_get_contact` | Get full details of a specific contact |
-| `people_create_contact` | Create a new contact |
-| `people_update_contact` | Update an existing contact |
+| `people_create_contact` | Create a contact (multiple emails/phones, notes, birthday, URLs) |
+| `people_update_contact` | Update a contact (lists replace) |
 | `people_delete_contact` | Delete a contact |
+| `people_list_other_contacts` | List auto-collected "Other contacts" |
+| `people_list_groups` | List contact groups (labels) |
+| `people_create_group` | Create a contact group |
+| `people_add_to_group` | Add contacts to a group |
 
-### Google Docs (5 tools)
+### Google Docs (10 tools)
 
 | Tool | Description |
 |------|-------------|
-| `docs_get` | Read the full text content of a Google Doc |
+| `docs_get` | Read the full text of a Doc, **including all tabs** |
 | `docs_create` | Create a new Doc with optional initial text |
-| `docs_write` | Insert text at a specific position |
+| `docs_write` | Insert text at a position (optional target tab) |
 | `docs_replace` | Find and replace text throughout a Doc |
 | `docs_format` | Format text (bold, italic, underline, headings, links, font size) |
+| `docs_insert_table` | Insert a table |
+| `docs_insert_image` | Insert an inline image from a URL |
+| `docs_insert_page_break` | Insert a page break |
+| `docs_create_bullets` | Turn paragraphs into a bulleted/numbered list |
+| `docs_batch_update` | Raw Docs API batchUpdate passthrough |
 
-### Google Sheets (7 tools)
+### Google Sheets (16 tools)
 
 | Tool | Description |
 |------|-------------|
 | `sheets_get_metadata` | Get spreadsheet metadata (title, tabs, row/col counts) |
 | `sheets_get_range` | Read a specific range (A1 notation) |
 | `sheets_get_data` | Read entire sheet as CSV, JSON, or raw values |
+| `sheets_batch_get` | Read several ranges at once |
 | `sheets_create` | Create a new spreadsheet |
 | `sheets_update_range` | Write values to a range |
 | `sheets_append_rows` | Append rows to the end of a sheet |
+| `sheets_clear_range` | Clear values in a range |
+| `sheets_format_cells` | Format cells (bold, colors, number formats, alignment) |
+| `sheets_merge_cells` | Merge a block of cells |
+| `sheets_freeze` | Freeze header rows/columns |
 | `sheets_add_sheet` | Add a new sheet/tab |
+| `sheets_delete_sheet` | Delete a sheet/tab |
+| `sheets_rename_sheet` | Rename a sheet/tab |
+| `sheets_duplicate_sheet` | Duplicate a sheet/tab |
+| `sheets_batch_update` | Raw Sheets API batchUpdate passthrough |
 
-### Google Slides (6 tools)
+### Google Slides (13 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -191,6 +235,13 @@ All 57 tools will appear automatically.
 | `slides_add_slide` | Add a slide (BLANK, TITLE, TITLE_AND_BODY, etc.) |
 | `slides_replace_text` | Find and replace text across all slides |
 | `slides_insert_text` | Insert text into a specific shape/text box |
+| `slides_create_textbox` | Create a text box (and optionally fill it) |
+| `slides_create_image` | Place an image from a URL onto a slide |
+| `slides_format_text` | Format text in a shape (bold, size, font, color) |
+| `slides_set_speaker_notes` | Set a slide's speaker notes |
+| `slides_delete_object` | Delete a shape, image, or slide |
+| `slides_duplicate_object` | Duplicate a shape, image, or slide |
+| `slides_batch_update` | Raw Slides API batchUpdate passthrough |
 
 ## Usage Examples
 
@@ -226,7 +277,7 @@ All 57 tools will appear automatically.
 
 ```
 google-workspace-mcp/
-├── server.py           # MCP server — 57 tools
+├── server.py           # MCP server — 109 tools
 ├── auth.py             # OAuth2 token manager (per account)
 ├── gmail.py            # Gmail API wrapper
 ├── gcalendar.py        # Google Calendar API wrapper

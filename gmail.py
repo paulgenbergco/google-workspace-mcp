@@ -1,5 +1,9 @@
 import base64
+import mimetypes
+import os
 import re
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional
@@ -65,6 +69,56 @@ class GmailService:
 
     # ------------------------------------------------------------------ send / draft
 
+    def _build_message(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: str = "",
+        bcc: str = "",
+        html_body: str = "",
+        attachments: Optional[List[str]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """Build a MIME message and return the raw base64url-encoded string."""
+        if html_body or attachments:
+            msg: MIMEText | MIMEMultipart = MIMEMultipart("mixed")
+            alt = MIMEMultipart("alternative")
+            alt.attach(MIMEText(body, "plain"))
+            if html_body:
+                alt.attach(MIMEText(html_body, "html"))
+            msg.attach(alt)
+
+            for path in attachments or []:
+                with open(path, "rb") as fh:
+                    file_data = fh.read()
+                ctype, _ = mimetypes.guess_type(path)
+                if ctype is None:
+                    ctype = "application/octet-stream"
+                maintype, subtype = ctype.split("/", 1)
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(file_data)
+                encoders.encode_base64(part)
+                part.add_header(
+                    "Content-Disposition",
+                    "attachment",
+                    filename=os.path.basename(path),
+                )
+                msg.attach(part)
+        else:
+            msg = MIMEText(body, "plain")
+
+        msg["to"] = to
+        msg["subject"] = subject
+        if cc:
+            msg["cc"] = cc
+        if bcc:
+            msg["bcc"] = bcc
+        for key, value in (headers or {}).items():
+            msg[key] = value
+
+        return self._encode(msg)
+
     def send_message(
         self,
         to: str,
@@ -72,17 +126,19 @@ class GmailService:
         body: str,
         cc: str = "",
         bcc: str = "",
+        html_body: str = "",
+        attachments: Optional[List[str]] = None,
+        thread_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        msg = MIMEText(body, "plain")
-        msg["to"] = to
-        msg["subject"] = subject
-        if cc:
-            msg["cc"] = cc
-        if bcc:
-            msg["bcc"] = bcc
+        raw = self._build_message(
+            to, subject, body, cc, bcc, html_body, attachments
+        )
+        body_payload: Dict[str, Any] = {"raw": raw}
+        if thread_id:
+            body_payload["threadId"] = thread_id
 
         return self.service.users().messages().send(
-            userId="me", body={"raw": self._encode(msg)}
+            userId="me", body=body_payload
         ).execute()
 
     def create_draft(
@@ -92,18 +148,120 @@ class GmailService:
         body: str,
         cc: str = "",
         bcc: str = "",
+        html_body: str = "",
+        attachments: Optional[List[str]] = None,
+        thread_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        msg = MIMEText(body, "plain")
-        msg["to"] = to
-        msg["subject"] = subject
-        if cc:
-            msg["cc"] = cc
-        if bcc:
-            msg["bcc"] = bcc
+        raw = self._build_message(
+            to, subject, body, cc, bcc, html_body, attachments
+        )
+        message: Dict[str, Any] = {"raw": raw}
+        if thread_id:
+            message["threadId"] = thread_id
 
         return self.service.users().drafts().create(
-            userId="me", body={"message": {"raw": self._encode(msg)}}
+            userId="me", body={"message": message}
         ).execute()
+
+    def reply_message(
+        self,
+        message_id: str,
+        body: str,
+        reply_all: bool = False,
+        html_body: str = "",
+        attachments: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        original = self._get_raw_message(message_id, format="full")
+        payload = original.get("payload", {})
+        headers: Dict[str, str] = {}
+        for h in payload.get("headers", []):
+            headers[h["name"].lower()] = h["value"]
+
+        own_address = ""
+        try:
+            own_address = self.get_profile().get("emailAddress", "")
+        except Exception:
+            own_address = ""
+
+        to = headers.get("from", "")
+        cc = ""
+        if reply_all:
+            extra = []
+            for field in ("to", "cc"):
+                value = headers.get(field, "")
+                if value:
+                    extra.append(value)
+            recipients = [
+                addr.strip()
+                for addr in ",".join(extra).split(",")
+                if addr.strip()
+            ]
+            if own_address:
+                recipients = [
+                    addr
+                    for addr in recipients
+                    if own_address.lower() not in addr.lower()
+                ]
+            cc = ", ".join(recipients)
+
+        subject = headers.get("subject", "")
+        if not subject.lower().startswith("re:"):
+            subject = "Re: " + subject
+
+        reply_headers: Dict[str, str] = {}
+        orig_message_id = headers.get("message-id", "")
+        if orig_message_id:
+            reply_headers["In-Reply-To"] = orig_message_id
+            existing_refs = headers.get("references", "")
+            reply_headers["References"] = (
+                (existing_refs + " " + orig_message_id).strip()
+                if existing_refs
+                else orig_message_id
+            )
+
+        raw = self._build_message(
+            to,
+            subject,
+            body,
+            cc=cc,
+            html_body=html_body,
+            attachments=attachments,
+            headers=reply_headers,
+        )
+        body_payload: Dict[str, Any] = {"raw": raw}
+        thread_id = original.get("threadId")
+        if thread_id:
+            body_payload["threadId"] = thread_id
+
+        return self.service.users().messages().send(
+            userId="me", body=body_payload
+        ).execute()
+
+    def forward_message(
+        self,
+        message_id: str,
+        to: str,
+        body: str = "",
+        cc: str = "",
+        bcc: str = "",
+    ) -> Dict[str, Any]:
+        original = self._get_raw_message(message_id, format="full")
+        parsed = self._parse_message(original)
+
+        forwarded = body
+        if forwarded:
+            forwarded += "\n\n"
+        forwarded += "---------- Forwarded message ----------\n"
+        forwarded += f"From: {parsed.get('from', '')}\n"
+        forwarded += f"Date: {parsed.get('date', '')}\n"
+        forwarded += f"Subject: {parsed.get('subject', '')}\n"
+        forwarded += f"To: {parsed.get('to', '')}\n\n"
+        forwarded += parsed.get("body", "")
+
+        orig_subject = parsed.get("subject", "")
+        subject = "Fwd: " + orig_subject
+
+        return self.send_message(to, subject, forwarded, cc=cc, bcc=bcc)
 
     def list_drafts(self, max_results: int = 20) -> List[Dict[str, Any]]:
         result = self.service.users().drafts().list(
@@ -135,9 +293,14 @@ class GmailService:
             "thread_id": msg.get("threadId", ""),
         }
 
-    def download_attachment(self, message_id: str, attachment_id: str) -> Dict[str, Any]:
+    def download_attachment(
+        self,
+        message_id: str,
+        attachment_id: str,
+        save_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Download an attachment from a message."""
-        msg = self._get_raw_message(message_id, format="metadata")
+        msg = self._get_raw_message(message_id, format="full")
         payload = msg.get("payload", {})
 
         # Find the attachment part to get filename and mime type
@@ -155,16 +318,24 @@ class GmailService:
         ).execute()
 
         data = att.get("data", "")
-        decoded = base64.urlsafe_b64decode(data.encode()).decode("utf-8", errors="replace")
+        raw = base64.urlsafe_b64decode(data.encode())
 
-        return {
+        result: Dict[str, Any] = {
             "attachment_id": attachment_id,
             "message_id": message_id,
             "filename": filename,
             "mimeType": mime_type,
             "size": att.get("size", 0),
-            "content": decoded,
         }
+
+        if save_path:
+            with open(save_path, "wb") as fh:
+                fh.write(raw)
+            result["saved_to"] = save_path
+        else:
+            result["data_base64"] = base64.b64encode(raw).decode()
+
+        return result
 
     def list_attachments(self, message_id: str) -> List[Dict[str, Any]]:
         """List all attachments on a message."""
@@ -219,6 +390,150 @@ class GmailService:
     def trash_message(self, message_id: str) -> Dict[str, Any]:
         return self.service.users().messages().trash(
             userId="me", id=message_id
+        ).execute()
+
+    def untrash_message(self, message_id: str) -> Dict[str, Any]:
+        return self.service.users().messages().untrash(
+            userId="me", id=message_id
+        ).execute()
+
+    def create_label(
+        self,
+        name: str,
+        label_list_visibility: str = "labelShow",
+        message_list_visibility: str = "show",
+    ) -> Dict[str, Any]:
+        body = {
+            "name": name,
+            "labelListVisibility": label_list_visibility,
+            "messageListVisibility": message_list_visibility,
+        }
+        return self.service.users().labels().create(
+            userId="me", body=body
+        ).execute()
+
+    def update_label(
+        self,
+        label_id: str,
+        name: Optional[str] = None,
+        label_list_visibility: Optional[str] = None,
+        message_list_visibility: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {}
+        if name is not None:
+            body["name"] = name
+        if label_list_visibility is not None:
+            body["labelListVisibility"] = label_list_visibility
+        if message_list_visibility is not None:
+            body["messageListVisibility"] = message_list_visibility
+
+        return self.service.users().labels().patch(
+            userId="me", id=label_id, body=body
+        ).execute()
+
+    def delete_label(self, label_id: str) -> Dict[str, Any]:
+        self.service.users().labels().delete(
+            userId="me", id=label_id
+        ).execute()
+        return {"deleted": True, "label_id": label_id}
+
+    def batch_modify(
+        self,
+        message_ids: List[str],
+        add_labels: Optional[List[str]] = None,
+        remove_labels: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {"ids": message_ids}
+        if add_labels:
+            body["addLabelIds"] = add_labels
+        if remove_labels:
+            body["removeLabelIds"] = remove_labels
+
+        self.service.users().messages().batchModify(
+            userId="me", body=body
+        ).execute()
+        return {"modified": len(message_ids)}
+
+    def modify_thread_labels(
+        self,
+        thread_id: str,
+        add_labels: Optional[List[str]] = None,
+        remove_labels: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {}
+        if add_labels:
+            body["addLabelIds"] = add_labels
+        if remove_labels:
+            body["removeLabelIds"] = remove_labels
+
+        return self.service.users().threads().modify(
+            userId="me", id=thread_id, body=body
+        ).execute()
+
+    def mark_read(self, message_id: str) -> Dict[str, Any]:
+        return self.modify_labels(message_id, remove_labels=["UNREAD"])
+
+    def mark_unread(self, message_id: str) -> Dict[str, Any]:
+        return self.modify_labels(message_id, add_labels=["UNREAD"])
+
+    # ------------------------------------------------------------------ filters
+
+    def list_filters(self) -> Dict[str, Any]:
+        return self.service.users().settings().filters().list(
+            userId="me"
+        ).execute()
+
+    def create_filter(
+        self,
+        criteria: Dict[str, Any],
+        action: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self.service.users().settings().filters().create(
+            userId="me", body={"criteria": criteria, "action": action}
+        ).execute()
+
+    def delete_filter(self, filter_id: str) -> Dict[str, Any]:
+        self.service.users().settings().filters().delete(
+            userId="me", id=filter_id
+        ).execute()
+        return {"deleted": True, "filter_id": filter_id}
+
+    # ------------------------------------------------------------------ vacation
+
+    def get_vacation(self) -> Dict[str, Any]:
+        return self.service.users().settings().getVacation(
+            userId="me"
+        ).execute()
+
+    def set_vacation(
+        self,
+        enabled: bool,
+        subject: str = "",
+        body: str = "",
+        html_body: str = "",
+        restrict_to_contacts: bool = False,
+        restrict_to_domain: bool = False,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        vacation_body: Dict[str, Any] = {
+            "enableAutoReply": enabled,
+            "restrictToContacts": restrict_to_contacts,
+            "restrictToDomain": restrict_to_domain,
+        }
+        if subject:
+            vacation_body["responseSubject"] = subject
+        if body:
+            vacation_body["responseBodyPlainText"] = body
+        if html_body:
+            vacation_body["responseBodyHtml"] = html_body
+        if start_time is not None:
+            vacation_body["startTime"] = str(start_time)
+        if end_time is not None:
+            vacation_body["endTime"] = str(end_time)
+
+        return self.service.users().settings().updateVacation(
+            userId="me", body=vacation_body
         ).execute()
 
     # ------------------------------------------------------------------ internals

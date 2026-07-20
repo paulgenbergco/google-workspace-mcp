@@ -11,34 +11,64 @@ class DocsService:
 
     # ------------------------------------------------------------------ read
 
-    def get_text(self, document_id: str) -> Dict[str, Any]:
-        """Read the full text content of a Google Doc."""
-        doc = self.service.documents().get(documentId=document_id).execute()
-
+    def _extract_text(self, content_list: List[Dict[str, Any]]) -> str:
+        """Walk paragraph elements' textRuns and return the concatenated string."""
         text_parts = []
-        for element in doc.get("body", {}).get("content", []):
+        for element in content_list:
             paragraph = element.get("paragraph", {})
             for el in paragraph.get("elements", []):
                 text_run = el.get("textRun", {})
                 if text_run.get("content"):
                     text_parts.append(text_run["content"])
+        return "".join(text_parts)
 
-        tabs = []
-        for tab in doc.get("tabs", []):
-            tab_props = tab.get("tabProperties", {})
-            tabs.append({
-                "tabId": tab_props.get("tabId", ""),
-                "title": tab_props.get("title", ""),
-            })
+    def get_text(self, document_id: str, include_tabs: bool = True) -> Dict[str, Any]:
+        """Read the full text content of a Google Doc."""
+        doc = self.service.documents().get(
+            documentId=document_id, includeTabsContent=True
+        ).execute()
+
+        flat_tabs: List[Dict[str, Any]] = []
+
+        def _walk_tabs(tab_list: List[Dict[str, Any]], nesting_level: int) -> None:
+            for i, tab in enumerate(tab_list):
+                tab_props = tab.get("tabProperties", {})
+                content = (
+                    tab.get("documentTab", {}).get("body", {}).get("content", [])
+                )
+                flat_tabs.append({
+                    "tabId": tab_props.get("tabId", ""),
+                    "title": tab_props.get("title", ""),
+                    "index": i,
+                    "nestingLevel": nesting_level,
+                    "text": self._extract_text(content),
+                })
+                _walk_tabs(tab.get("childTabs", []), nesting_level + 1)
+
+        _walk_tabs(doc.get("tabs", []), 0)
+
+        if flat_tabs:
+            text = "\n\n".join(tab["text"] for tab in flat_tabs)
+            tabs: Optional[List[Dict[str, Any]]] = flat_tabs
+        else:
+            text = self._extract_text(doc.get("body", {}).get("content", []))
+            tabs = None
 
         return {
             "documentId": doc.get("documentId", ""),
             "title": doc.get("title", ""),
-            "text": "".join(text_parts),
-            "tabs": tabs if tabs else None,
+            "text": text,
+            "tabs": tabs,
         }
 
     # ------------------------------------------------------------------ write
+
+    def _location(self, index: int, tab_id: Optional[str]) -> Dict[str, Any]:
+        """Build a Docs API location object, including tabId when provided."""
+        location: Dict[str, Any] = {"index": index}
+        if tab_id is not None:
+            location["tabId"] = tab_id
+        return location
 
     def create(self, title: str, body_text: str = "") -> Dict[str, Any]:
         """Create a new Google Doc, optionally with initial text."""
@@ -66,7 +96,9 @@ class DocsService:
             "url": f"https://docs.google.com/document/d/{doc_id}/edit",
         }
 
-    def write_text(self, document_id: str, text: str, index: int = 1) -> Dict[str, Any]:
+    def write_text(
+        self, document_id: str, text: str, index: int = 1, tab_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Insert text at a specific position in a Doc."""
         self.service.documents().batchUpdate(
             documentId=document_id,
@@ -74,7 +106,7 @@ class DocsService:
                 "requests": [
                     {
                         "insertText": {
-                            "location": {"index": index},
+                            "location": self._location(index, tab_id),
                             "text": text,
                         }
                     }
@@ -89,21 +121,30 @@ class DocsService:
         }
 
     def replace_text(
-        self, document_id: str, find: str, replace: str, match_case: bool = True
+        self,
+        document_id: str,
+        find: str,
+        replace: str,
+        match_case: bool = True,
+        tab_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Find and replace text throughout a Doc."""
+        replace_all_text: Dict[str, Any] = {
+            "containsText": {
+                "text": find,
+                "matchCase": match_case,
+            },
+            "replaceText": replace,
+        }
+        if tab_ids is not None:
+            replace_all_text["tabsCriteria"] = {"tabIds": tab_ids}
+
         result = self.service.documents().batchUpdate(
             documentId=document_id,
             body={
                 "requests": [
                     {
-                        "replaceAllText": {
-                            "containsText": {
-                                "text": find,
-                                "matchCase": match_case,
-                            },
-                            "replaceText": replace,
-                        }
+                        "replaceAllText": replace_all_text
                     }
                 ]
             },
@@ -130,6 +171,7 @@ class DocsService:
         font_size: Optional[int] = None,
         link_url: Optional[str] = None,
         named_style: Optional[str] = None,
+        tab_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Format a range of text in a Doc.
 
@@ -158,9 +200,15 @@ class DocsService:
             fields.append("link")
 
         if fields:
+            text_range: Dict[str, Any] = {
+                "startIndex": start_index,
+                "endIndex": end_index,
+            }
+            if tab_id is not None:
+                text_range["tabId"] = tab_id
             requests.append({
                 "updateTextStyle": {
-                    "range": {"startIndex": start_index, "endIndex": end_index},
+                    "range": text_range,
                     "textStyle": style,
                     "fields": ",".join(fields),
                 }
@@ -168,9 +216,15 @@ class DocsService:
 
         # Paragraph/heading style
         if named_style:
+            paragraph_range: Dict[str, Any] = {
+                "startIndex": start_index,
+                "endIndex": end_index,
+            }
+            if tab_id is not None:
+                paragraph_range["tabId"] = tab_id
             requests.append({
                 "updateParagraphStyle": {
-                    "range": {"startIndex": start_index, "endIndex": end_index},
+                    "range": paragraph_range,
                     "paragraphStyle": {"namedStyleType": named_style},
                     "fields": "namedStyleType",
                 }
@@ -187,4 +241,147 @@ class DocsService:
         return {
             "documentId": document_id,
             "formatted": {"start": start_index, "end": end_index},
+        }
+
+    def insert_table(
+        self,
+        document_id: str,
+        rows: int,
+        columns: int,
+        index: int = 1,
+        tab_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Insert a table at a specific position in a Doc."""
+        self.service.documents().batchUpdate(
+            documentId=document_id,
+            body={
+                "requests": [
+                    {
+                        "insertTable": {
+                            "rows": rows,
+                            "columns": columns,
+                            "location": self._location(index, tab_id),
+                        }
+                    }
+                ]
+            },
+        ).execute()
+
+        return {
+            "documentId": document_id,
+            "rows": rows,
+            "columns": columns,
+            "at_index": index,
+        }
+
+    def insert_image(
+        self,
+        document_id: str,
+        image_url: str,
+        index: int = 1,
+        width_pt: Optional[float] = None,
+        height_pt: Optional[float] = None,
+        tab_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Insert an inline image at a specific position in a Doc."""
+        insert_image: Dict[str, Any] = {
+            "uri": image_url,
+            "location": self._location(index, tab_id),
+        }
+
+        object_size: Dict[str, Any] = {}
+        if width_pt is not None:
+            object_size["width"] = {"magnitude": width_pt, "unit": "PT"}
+        if height_pt is not None:
+            object_size["height"] = {"magnitude": height_pt, "unit": "PT"}
+        if object_size:
+            insert_image["objectSize"] = object_size
+
+        self.service.documents().batchUpdate(
+            documentId=document_id,
+            body={"requests": [{"insertInlineImage": insert_image}]},
+        ).execute()
+
+        return {
+            "documentId": document_id,
+            "image_url": image_url,
+            "at_index": index,
+        }
+
+    def insert_page_break(
+        self, document_id: str, index: int = 1, tab_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Insert a page break at a specific position in a Doc."""
+        self.service.documents().batchUpdate(
+            documentId=document_id,
+            body={
+                "requests": [
+                    {
+                        "insertPageBreak": {
+                            "location": self._location(index, tab_id),
+                        }
+                    }
+                ]
+            },
+        ).execute()
+
+        return {
+            "documentId": document_id,
+            "at_index": index,
+        }
+
+    def create_bullets(
+        self,
+        document_id: str,
+        start_index: int,
+        end_index: int,
+        ordered: bool = False,
+        tab_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Apply bullet or numbered list formatting to a range of paragraphs."""
+        bullet_range: Dict[str, Any] = {
+            "startIndex": start_index,
+            "endIndex": end_index,
+        }
+        if tab_id is not None:
+            bullet_range["tabId"] = tab_id
+
+        preset = (
+            "NUMBERED_DECIMAL_ALPHA_ROMAN"
+            if ordered
+            else "BULLET_DISC_CIRCLE_SQUARE"
+        )
+
+        self.service.documents().batchUpdate(
+            documentId=document_id,
+            body={
+                "requests": [
+                    {
+                        "createParagraphBullets": {
+                            "range": bullet_range,
+                            "bulletPreset": preset,
+                        }
+                    }
+                ]
+            },
+        ).execute()
+
+        return {
+            "documentId": document_id,
+            "range": {"start": start_index, "end": end_index},
+            "ordered": ordered,
+        }
+
+    def batch_update(
+        self, document_id: str, requests: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Execute a raw list of Docs API batchUpdate requests."""
+        result = self.service.documents().batchUpdate(
+            documentId=document_id,
+            body={"requests": requests},
+        ).execute()
+
+        return {
+            "documentId": document_id,
+            "replies": result.get("replies", []),
         }

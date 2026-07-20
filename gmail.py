@@ -2,6 +2,7 @@ import base64
 import mimetypes
 import os
 import re
+import tempfile
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -328,12 +329,23 @@ class GmailService:
             "size": att.get("size", 0),
         }
 
+        text_types = ("text/", "application/json", "application/xml", "application/javascript")
+        is_text = bool(mime_type) and any(mime_type.startswith(t) for t in text_types)
+
         if save_path:
             with open(save_path, "wb") as fh:
                 fh.write(raw)
             result["saved_to"] = save_path
+        elif is_text or not mime_type:
+            result["content"] = raw.decode("utf-8", errors="replace")
         else:
-            result["data_base64"] = base64.b64encode(raw).decode()
+            # Binary with no explicit path: write to a temp file and hand back the path
+            # (avoids dumping base64 into the caller's context).
+            suffix = os.path.splitext(filename)[1] if filename else ""
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            tmp.write(raw)
+            tmp.close()
+            result["file_path"] = tmp.name
 
         return result
 
@@ -371,17 +383,43 @@ class GmailService:
             for lbl in result.get("labels", [])
         ]
 
+    def _resolve_label_ids(self, labels: List[str], create_missing: bool) -> List[str]:
+        """Map label names to IDs. Existing IDs and system labels pass through.
+        Unknown names are created when create_missing is True (for adds), else skipped."""
+        if not labels:
+            return []
+        existing = self.list_labels()
+        by_id = {lbl["id"] for lbl in existing}
+        by_name = {lbl["name"]: lbl["id"] for lbl in existing}
+        resolved: List[str] = []
+        for label in labels:
+            if label in by_id:                     # already an ID (incl. system labels)
+                resolved.append(label)
+            elif label in by_name:                 # a known label name
+                resolved.append(by_name[label])
+            elif create_missing:                   # new name on an add -> create it
+                created = self.create_label(label)
+                by_id.add(created["id"])
+                by_name[created["name"]] = created["id"]
+                resolved.append(created["id"])
+            # else: removing a label that doesn't exist -> nothing to do
+        return resolved
+
     def modify_labels(
         self,
         message_id: str,
         add_labels: Optional[List[str]] = None,
         remove_labels: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
+        """Add/remove labels on a message. Label names are resolved to IDs;
+        unknown names on an add are auto-created (e.g. 'Cloe/triaged')."""
         body: Dict[str, Any] = {}
-        if add_labels:
-            body["addLabelIds"] = add_labels
-        if remove_labels:
-            body["removeLabelIds"] = remove_labels
+        add_ids = self._resolve_label_ids(add_labels or [], create_missing=True)
+        remove_ids = self._resolve_label_ids(remove_labels or [], create_missing=False)
+        if add_ids:
+            body["addLabelIds"] = add_ids
+        if remove_ids:
+            body["removeLabelIds"] = remove_ids
 
         return self.service.users().messages().modify(
             userId="me", id=message_id, body=body

@@ -1,19 +1,22 @@
 # Google Workspace Multi-Account MCP Server
 
-A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects multiple Google Workspace accounts — **Gmail, Calendar, Drive, Contacts, Docs, Sheets, and Slides** — to Claude Desktop and Claude Code. 109 tools, full read+write, runs entirely on your machine.
+A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects multiple Google Workspace accounts — **Gmail, Calendar, Drive, Contacts, Docs, Sheets, and Slides** — to Claude Desktop and Claude Code. 110 tools, full read+write, runs entirely on your machine.
 
 > Forked from [DiegoMaldonadoRosas/gmail-mcp](https://github.com/DiegoMaldonadoRosas/gmail-mcp) with Drive, Contacts, Docs, Sheets, and Slides support added.
 
 ## Features
 
 - **Multiple accounts** — connect as many Gmail or Google Workspace accounts as you need
-- **Gmail** — cross-account search, read, send (HTML + attachments), threaded reply/reply-all, forward, drafts, label CRUD, batch label ops, mark read/unread, trash/untrash, filters, vacation responder
+- **Gmail** — cross-account search, read, send (HTML + attachments), **send as a verified alias**, threaded reply/reply-all, forward, drafts, label CRUD, batch label ops, mark read/unread, trash/untrash, filters, vacation responder
 - **Google Calendar** — list/search/create/update (patch) events with recurrence (RRULE), reminders, Meet links; RSVP, quick-add, move between calendars, list recurring instances, free/busy + suggested slots, create/delete calendars
 - **Google Drive** — cross-account search, read (binary-safe), upload from text or local file, export (PDF/etc.), copy, share & manage permissions, folders, move, rename, trash/untrash
 - **Google Contacts** — list, search, create/update with multiple emails/phones + notes/birthday/URLs, delete, "other contacts", contact groups
 - **Google Docs** — tab-aware read/write, create, insert/replace/format text, **tables, inline images, bullet/numbered lists, page breaks**, raw batchUpdate
 - **Google Sheets** — read (CSV/JSON/raw, batch multi-range), create, write/append, **cell formatting, number formats, freeze, merge**, clear, add/delete/rename/duplicate sheets, raw batchUpdate
 - **Google Slides** — read text/metadata, create, add slides, **create text boxes & images, format text, speaker notes, delete/duplicate objects**, find/replace, raw batchUpdate
+- **Paging** — list and search tools return `nextPageToken` and accept `page_token`, so results past the first page are reachable
+- **Resilience** — every API call retries with exponential backoff on 429/5xx, and cross-account searches run concurrently rather than one account at a time
+- **Safety hints** — every tool is annotated read-only / additive / destructive, so clients can auto-approve reads and prompt only on the 23 tools that delete or overwrite
 
 ## Requirements
 
@@ -77,7 +80,9 @@ source .venv/bin/activate
 python setup_auth.py
 ```
 
-> **Note:** If upgrading from a previous version, re-run `setup_auth.py` for **every account** to grant the newly added scopes — `gmail.labels`, `gmail.settings.basic` (filters + vacation responder), and `contacts.other.readonly` ("other contacts"). Existing tools keep working without it, but these specific features will fail until each account is re-authenticated.
+> **Note:** Send-as aliases, paging, retries and tool annotations need **no re-authentication** — they use scopes you already granted.
+>
+> **Note:** If upgrading from a version older than that, re-run `setup_auth.py` for **every account** to grant the newly added scopes — `gmail.labels`, `gmail.settings.basic` (filters + vacation responder), and `contacts.other.readonly` ("other contacts"). Existing tools keep working without it, but these specific features will fail until each account is re-authenticated.
 
 ### 6. Add the server to Claude
 
@@ -96,11 +101,11 @@ python setup_auth.py
 
 ### 7. Restart Claude
 
-All 109 tools will appear automatically.
+All 110 tools will appear automatically.
 
-## Available Tools (109)
+## Available Tools (110)
 
-### Gmail (28 tools)
+### Gmail (29 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -128,6 +133,7 @@ All 109 tools will appear automatically.
 | `gmail_untrash` | Restore a message from trash |
 | `gmail_list_attachments` | List all attachments on a message |
 | `gmail_download_attachment` | Download attachment content (binary-safe; save to file) |
+| `gmail_list_send_as` | List addresses this account can send as (primary + aliases) |
 | `gmail_list_filters` | List filters (rules) |
 | `gmail_create_filter` | Create a filter |
 | `gmail_delete_filter` | Delete a filter |
@@ -245,7 +251,7 @@ All 109 tools will appear automatically.
 
 ## Usage Examples
 
-**Email:** *"Search for invoices across all my accounts"* · *"Send a draft I wrote earlier"* · *"Download the attachment from that email"*
+**Email:** *"Send that from my byalai alias"* · *"Search for invoices across all my accounts"* · *"Send a draft I wrote earlier"* · *"Download the attachment from that email"*
 
 **Calendar:** *"Create a meeting with Alice tomorrow at 2pm with a Meet link"* · *"Accept the invite for Friday's standup"* · *"When is everyone free next week?"*
 
@@ -277,7 +283,7 @@ All 109 tools will appear automatically.
 
 ```
 google-workspace-mcp/
-├── server.py           # MCP server — 109 tools
+├── server.py           # MCP server — 110 tools
 ├── auth.py             # OAuth2 token manager (per account)
 ├── gmail.py            # Gmail API wrapper
 ├── gcalendar.py        # Google Calendar API wrapper
@@ -286,6 +292,7 @@ google-workspace-mcp/
 ├── gdocs.py            # Google Docs API wrapper
 ├── gsheets.py          # Google Sheets API wrapper
 ├── gslides.py          # Google Slides API wrapper
+├── gapi.py             # Shared retry policy + HTTP error formatting
 ├── config.py           # Configuration loader
 ├── setup_auth.py       # One-time authentication script
 ├── setup.sh            # First-time installer

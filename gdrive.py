@@ -7,6 +7,8 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
+from gapi import RETRIES
+
 
 # Google Workspace mimeTypes → text-friendly export formats
 _EXPORT_MAP = {
@@ -34,6 +36,7 @@ class DriveService:
         query: str,
         max_results: int = 20,
         include_trashed: bool = False,
+        page_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Search files using Drive query syntax (e.g. "name contains 'invoice'")."""
         q = query
@@ -43,11 +46,12 @@ class DriveService:
         result = self.service.files().list(
             q=q,
             pageSize=min(max_results, 100),
+            pageToken=page_token,
             fields=f"files({_FILE_FIELDS}), nextPageToken",
             orderBy="modifiedTime desc",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         files = [self._parse_file(f) for f in result.get("files", [])]
         return {
@@ -56,19 +60,26 @@ class DriveService:
             "nextPageToken": result.get("nextPageToken"),
         }
 
-    def list_recent(self, max_results: int = 20) -> Dict[str, Any]:
+    def list_recent(
+        self, max_results: int = 20, page_token: Optional[str] = None
+    ) -> Dict[str, Any]:
         """List recently modified files."""
         result = self.service.files().list(
             q="trashed = false",
             pageSize=min(max_results, 100),
+            pageToken=page_token,
             fields=f"files({_FILE_FIELDS}), nextPageToken",
             orderBy="modifiedTime desc",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         files = [self._parse_file(f) for f in result.get("files", [])]
-        return {"count": len(files), "files": files}
+        return {
+            "count": len(files),
+            "files": files,
+            "nextPageToken": result.get("nextPageToken"),
+        }
 
     # ------------------------------------------------------------------ read
 
@@ -76,7 +87,7 @@ class DriveService:
         """Get file metadata."""
         f = self.service.files().get(
             fileId=file_id, fields="*", supportsAllDrives=True
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return self._parse_file(f)
 
     def read_content(
@@ -96,7 +107,7 @@ class DriveService:
             fileId=file_id,
             fields=f"{_FILE_FIELDS}",
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         mime_type = meta.get("mimeType", "")
         is_workspace = (
@@ -116,7 +127,7 @@ class DriveService:
 
             raw = self.service.files().export(
                 fileId=file_id, mimeType=effective_mime
-            ).execute()
+            ).execute(num_retries=RETRIES)
             if isinstance(raw, str):
                 raw = raw.encode("utf-8")
 
@@ -128,14 +139,14 @@ class DriveService:
         if mime_type.startswith("text/") or mime_type == "application/json":
             raw = self.service.files().get_media(
                 fileId=file_id, supportsAllDrives=True
-            ).execute()
+            ).execute(num_retries=RETRIES)
             content = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
             result["content"] = content
             return result
 
         raw = self.service.files().get_media(
             fileId=file_id, supportsAllDrives=True
-        ).execute()
+        ).execute(num_retries=RETRIES)
         if isinstance(raw, str):
             raw = raw.encode("utf-8")
         return self._binary_result(result, raw, meta, mime_type, save_path)
@@ -175,7 +186,7 @@ class DriveService:
             media_body=media,
             fields=_FILE_FIELDS,
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return self._parse_file(f)
 
@@ -192,7 +203,7 @@ class DriveService:
             media_body=media,
             fields=_FILE_FIELDS,
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return self._parse_file(f)
 
@@ -209,7 +220,7 @@ class DriveService:
             body=metadata,
             fields=_FILE_FIELDS,
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return self._parse_file(f)
 
@@ -217,7 +228,7 @@ class DriveService:
         """Move a file to a different folder."""
         current = self.service.files().get(
             fileId=file_id, fields="parents", supportsAllDrives=True
-        ).execute()
+        ).execute(num_retries=RETRIES)
         previous_parents = ",".join(current.get("parents", []))
 
         f = self.service.files().update(
@@ -226,7 +237,7 @@ class DriveService:
             removeParents=previous_parents,
             fields=_FILE_FIELDS,
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return self._parse_file(f)
 
@@ -237,7 +248,7 @@ class DriveService:
             body={"name": new_name},
             fields=_FILE_FIELDS,
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return self._parse_file(f)
 
@@ -248,7 +259,7 @@ class DriveService:
             body={"trashed": True},
             fields=_FILE_FIELDS,
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return self._parse_file(f)
 
@@ -259,7 +270,7 @@ class DriveService:
             body={"trashed": False},
             fields=_FILE_FIELDS,
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return self._parse_file(f)
 
@@ -281,7 +292,7 @@ class DriveService:
             body=body,
             fields=_FILE_FIELDS,
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return self._parse_file(f)
 
@@ -294,7 +305,7 @@ class DriveService:
         """Export a Workspace file to the given mimeType."""
         raw = self.service.files().export(
             fileId=file_id, mimeType=mime_type
-        ).execute()
+        ).execute(num_retries=RETRIES)
         if isinstance(raw, str):
             raw = raw.encode("utf-8")
 
@@ -349,7 +360,7 @@ class DriveService:
             emailMessage=message if message else None,
             supportsAllDrives=True,
             fields="id,type,role,emailAddress,domain",
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {"file_id": file_id, "permission": result}
 
@@ -359,7 +370,7 @@ class DriveService:
             fileId=file_id,
             fields="permissions(id,type,role,emailAddress,domain,displayName)",
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {"file_id": file_id, "permissions": result.get("permissions", [])}
 
@@ -369,7 +380,7 @@ class DriveService:
             fileId=file_id,
             permissionId=permission_id,
             supportsAllDrives=True,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {"removed": True, "file_id": file_id, "permission_id": permission_id}
 

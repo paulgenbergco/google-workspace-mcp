@@ -15,11 +15,13 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
+from googleapiclient.errors import HttpError
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
 from auth import AuthManager
 from config import get_accounts, get_client_secret_path, get_credentials_dir, load_config
+from gapi import describe_http_error
 from gcalendar import CalendarService
 from gdocs import DocsService
 from gdrive import DriveService
@@ -91,6 +93,32 @@ def _get_slides(account_name: str) -> SlidesService:
     return SlidesService(_get_creds(account_name), account_name)
 
 
+def _describe(exc: BaseException) -> str:
+    """Readable one-liner for an exception raised by a Google API call."""
+    if isinstance(exc, HttpError):
+        return describe_http_error(exc)
+    return f"{type(exc).__name__}: {exc}"
+
+
+async def _fan_out(call, empty_key: str) -> list[dict]:
+    """Run `call(account_name)` against every configured account concurrently.
+
+    Each account contributes one result object. Failures (unauthenticated,
+    rate-limited, revoked scope) are reported inline with an empty
+    `empty_key` list so one bad account never sinks the whole search.
+    """
+
+    async def one(acct: str) -> dict:
+        header = {"account": acct, "email": _accounts[acct].get("email", "")}
+        try:
+            data = await asyncio.to_thread(call, acct)
+        except Exception as exc:
+            return {**header, "error": _describe(exc), empty_key: []}
+        return {**header, **data}
+
+    return list(await asyncio.gather(*(one(acct) for acct in _accounts)))
+
+
 def _fmt(data: Any) -> list[types.TextContent]:
     if isinstance(data, str):
         return [types.TextContent(type="text", text=data)]
@@ -104,9 +132,73 @@ def _fmt(data: Any) -> list[types.TextContent]:
 server = Server("google-workspace")
 
 
+# ---------------------------------------------------------------------------
+# Tool annotations
+# ---------------------------------------------------------------------------
+# MCP clients use these hints to decide what needs a confirmation prompt.
+# Anything not listed as read-only is treated as a write; writes are additive
+# unless listed as destructive.
+
+# Tools that touch nothing, locally or remotely.
+# Deliberately excluded: gmail_download_attachment, drive_read_content and
+# drive_export all accept a save_path and can overwrite a local file.
+_READ_ONLY_TOOLS = frozenset({
+    "list_accounts",
+    "gmail_get_profile", "gmail_search", "gmail_read_message", "gmail_read_thread",
+    "gmail_list_drafts", "gmail_list_labels", "gmail_list_attachments",
+    "gmail_list_send_as", "gmail_list_filters", "gmail_get_vacation",
+    "calendar_list_calendars", "calendar_list_events", "calendar_search",
+    "calendar_get_event", "calendar_find_free_time", "calendar_suggest_slots",
+    "calendar_list_instances",
+    "drive_search", "drive_list_recent", "drive_get_file", "drive_list_permissions",
+    "people_list_contacts", "people_search", "people_get_contact",
+    "people_list_other_contacts", "people_list_groups",
+    "docs_get",
+    "sheets_get_metadata", "sheets_get_range", "sheets_get_data", "sheets_batch_get",
+    "slides_get_text", "slides_get_metadata",
+})
+
+# Writes that can delete or overwrite existing content. Renames, moves and
+# formatting are not here: they change metadata or presentation, not content.
+# sheets_merge_cells is, because Sheets keeps only the top-left value.
+# The three raw batch_update passthroughs are, because they can express
+# anything the underlying API can, including deletes.
+_DESTRUCTIVE_TOOLS = frozenset({
+    "gmail_trash", "gmail_delete_label", "gmail_delete_filter", "gmail_set_vacation",
+    "calendar_update_event", "calendar_delete_event", "calendar_delete_calendar",
+    "drive_update", "drive_trash", "drive_remove_permission",
+    "people_update_contact", "people_delete_contact",
+    "docs_replace", "docs_batch_update",
+    "sheets_update_range", "sheets_clear_range", "sheets_delete_sheet",
+    "sheets_merge_cells", "sheets_batch_update",
+    "slides_replace_text", "slides_delete_object", "slides_set_speaker_notes",
+    "slides_batch_update",
+})
+
+
+def _annotate(tools: list[types.Tool]) -> list[types.Tool]:
+    """Attach read-only / destructive hints to every tool."""
+    names = {tool.name for tool in tools}
+    unknown = (_READ_ONLY_TOOLS | _DESTRUCTIVE_TOOLS) - names
+    if unknown:
+        print(
+            f"WARNING: annotation lists name tools that do not exist: {sorted(unknown)}",
+            file=sys.stderr,
+        )
+
+    for tool in tools:
+        read_only = tool.name in _READ_ONLY_TOOLS
+        tool.annotations = types.ToolAnnotations(
+            readOnlyHint=read_only,
+            destructiveHint=False if read_only else tool.name in _DESTRUCTIVE_TOOLS,
+            openWorldHint=True,
+        )
+    return tools
+
+
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
-    return [
+    return _annotate([
         types.Tool(
             name="list_accounts",
             description=(
@@ -139,6 +231,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "page_token": {"type": "string", "description": "Page token from a previous call's nextPageToken, to fetch the next page. Only valid together with 'account' \u2014 tokens are per-account and cannot be reused across a multi-account search."},
                     "account": {
                         "type": "string",
                         "description": "Account to search. Omit to search all configured accounts.",
@@ -203,6 +296,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "from_alias": {"type": "string", "description": "Send from a verified send-as alias instead of the account's primary address. Accepts 'alias@example.com' or 'Name <alias@example.com>'. Use gmail_list_send_as to see valid values."},
                     "account": {
                         "type": "string",
                         "description": "Account to send from",
@@ -228,6 +322,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "from_alias": {"type": "string", "description": "Send from a verified send-as alias instead of the account's primary address. Accepts 'alias@example.com' or 'Name <alias@example.com>'. Use gmail_list_send_as to see valid values."},
                     "account": {
                         "type": "string",
                         "description": "Account to create the draft in",
@@ -358,6 +453,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "from_alias": {"type": "string", "description": "Send from a verified send-as alias instead of the account's primary address. Accepts 'alias@example.com' or 'Name <alias@example.com>'. Use gmail_list_send_as to see valid values."},
                     "account": {"type": "string", "description": "Account name"},
                     "message_id": {"type": "string", "description": "Message ID to reply to"},
                     "body": {"type": "string", "description": "Reply body (plain text)"},
@@ -374,6 +470,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "from_alias": {"type": "string", "description": "Send from a verified send-as alias instead of the account's primary address. Accepts 'alias@example.com' or 'Name <alias@example.com>'. Use gmail_list_send_as to see valid values."},
                     "account": {"type": "string", "description": "Account name"},
                     "message_id": {"type": "string", "description": "Message ID to forward"},
                     "to": {"type": "string", "description": "Recipient(s), comma-separated"},
@@ -490,6 +587,21 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="gmail_list_send_as",
+            description=(
+                "List the addresses this account can send mail as: the primary address plus any "
+                "aliases. Entries with usable=true may be passed as 'from_alias' to gmail_send, "
+                "gmail_create_draft, gmail_reply and gmail_forward."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name"},
+                },
+                "required": ["account"],
+            },
+        ),
+        types.Tool(
             name="gmail_list_filters",
             description="List Gmail filters (rules) for an account.",
             inputSchema={
@@ -580,6 +692,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "page_token": {"type": "string", "description": "Page token from a previous call's nextPageToken, to fetch the next page."},
                     "account": {"type": "string", "description": "Account name"},
                     "calendar_id": {
                         "type": "string",
@@ -609,6 +722,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "page_token": {"type": "string", "description": "Page token from a previous call's nextPageToken, to fetch the next page."},
                     "account": {"type": "string", "description": "Account name"},
                     "query": {"type": "string", "description": "Search keyword(s)"},
                     "calendar_id": {
@@ -874,6 +988,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "page_token": {"type": "string", "description": "Page token from a previous call's nextPageToken, to fetch the next page. Only valid together with 'account' \u2014 tokens are per-account and cannot be reused across a multi-account search."},
                     "account": {
                         "type": "string",
                         "description": "Account to search. Omit to search all accounts.",
@@ -897,6 +1012,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "page_token": {"type": "string", "description": "Page token from a previous call's nextPageToken, to fetch the next page."},
                     "account": {"type": "string", "description": "Account name"},
                     "max_results": {
                         "type": "integer",
@@ -1126,6 +1242,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "page_token": {"type": "string", "description": "Page token from a previous call's nextPageToken, to fetch the next page."},
                     "account": {"type": "string", "description": "Account name"},
                     "max_results": {"type": "integer", "description": "Max contacts to return (default 50)", "default": 50},
                 },
@@ -1222,6 +1339,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "page_token": {"type": "string", "description": "Page token from a previous call's nextPageToken, to fetch the next page."},
                     "account": {"type": "string", "description": "Account name"},
                     "max_results": {"type": "integer", "description": "Max to return (default 50)", "default": 50},
                 },
@@ -1882,7 +2000,7 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["account", "presentation_id", "requests"],
             },
         ),
-    ]
+    ])
 
 
 @server.call_tool()
@@ -1918,28 +2036,20 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
 
             if account:
                 svc = _get_service(account)
-                data = svc.search_messages(query, max_results, include_body=include_body)
+                data = svc.search_messages(
+                    query, max_results, include_body=include_body,
+                    page_token=args.get("page_token"),
+                )
                 data["account"] = account
                 data["email"] = _accounts[account].get("email", "")
                 return _fmt(data)
             else:
-                all_results = []
-                for acct in _accounts:
-                    try:
-                        svc = _get_service(acct)
-                        data = svc.search_messages(query, max_results, include_body=include_body)
-                        all_results.append({
-                            "account": acct,
-                            "email": _accounts[acct].get("email", ""),
-                            **data,
-                        })
-                    except ValueError as exc:
-                        all_results.append({
-                            "account": acct,
-                            "error": str(exc),
-                            "messages": [],
-                        })
-                return _fmt(all_results)
+                return _fmt(await _fan_out(
+                    lambda acct: _get_service(acct).search_messages(
+                        query, max_results, include_body=include_body
+                    ),
+                    empty_key="messages",
+                ))
 
         # ---- gmail_read_message -------------------------------------------
         elif name == "gmail_read_message":
@@ -1963,6 +2073,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 html_body=args.get("html_body", ""),
                 attachments=args.get("attachments"),
                 thread_id=args.get("thread_id"),
+                from_alias=args.get("from_alias", ""),
             )
             return _fmt({
                 "status": "sent",
@@ -1982,6 +2093,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 html_body=args.get("html_body", ""),
                 attachments=args.get("attachments"),
                 thread_id=args.get("thread_id"),
+                from_alias=args.get("from_alias", ""),
             )
             return _fmt({"status": "draft created", "draft_id": result.get("id")})
 
@@ -1994,6 +2106,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 reply_all=bool(args.get("reply_all", False)),
                 html_body=args.get("html_body", ""),
                 attachments=args.get("attachments"),
+                from_alias=args.get("from_alias", ""),
             ))
 
         # ---- gmail_forward ------------------------------------------------
@@ -2005,6 +2118,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 body=args.get("body", ""),
                 cc=args.get("cc", ""),
                 bcc=args.get("bcc", ""),
+                from_alias=args.get("from_alias", ""),
             ))
 
         # ---- gmail_create_label -------------------------------------------
@@ -2064,6 +2178,11 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
             svc = _get_service(args["account"])
             svc.untrash_message(args["message_id"])
             return _fmt({"status": "restored from trash", "message_id": args["message_id"]})
+
+        # ---- gmail_list_send_as -------------------------------------------
+        elif name == "gmail_list_send_as":
+            svc = _get_service(args["account"])
+            return _fmt(svc.list_send_as())
 
         # ---- gmail_list_filters -------------------------------------------
         elif name == "gmail_list_filters":
@@ -2160,6 +2279,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 time_max=args.get("time_max"),
                 max_results=int(args.get("max_results", 20)),
                 calendar_id=args.get("calendar_id", "primary"),
+                page_token=args.get("page_token"),
             ))
 
         # ---- calendar_search ----------------------------------------------
@@ -2171,6 +2291,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                 time_max=args.get("time_max"),
                 max_results=int(args.get("max_results", 20)),
                 calendar_id=args.get("calendar_id", "primary"),
+                page_token=args.get("page_token"),
             ))
 
         # ---- calendar_get_event -------------------------------------------
@@ -2305,33 +2426,25 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
 
             if account:
                 svc = _get_drive(account)
-                data = svc.search_files(query, max_results)
+                data = svc.search_files(
+                    query, max_results, page_token=args.get("page_token")
+                )
                 data["account"] = account
                 data["email"] = _accounts[account].get("email", "")
                 return _fmt(data)
             else:
-                all_results = []
-                for acct in _accounts:
-                    try:
-                        svc = _get_drive(acct)
-                        data = svc.search_files(query, max_results)
-                        all_results.append({
-                            "account": acct,
-                            "email": _accounts[acct].get("email", ""),
-                            **data,
-                        })
-                    except ValueError as exc:
-                        all_results.append({
-                            "account": acct,
-                            "error": str(exc),
-                            "files": [],
-                        })
-                return _fmt(all_results)
+                return _fmt(await _fan_out(
+                    lambda acct: _get_drive(acct).search_files(query, max_results),
+                    empty_key="files",
+                ))
 
         # ---- drive_list_recent --------------------------------------------
         elif name == "drive_list_recent":
             svc = _get_drive(args["account"])
-            return _fmt(svc.list_recent(int(args.get("max_results", 20))))
+            return _fmt(svc.list_recent(
+                int(args.get("max_results", 20)),
+                page_token=args.get("page_token"),
+            ))
 
         # ---- drive_get_file -----------------------------------------------
         elif name == "drive_get_file":
@@ -2447,7 +2560,10 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
         # ---- people_list_contacts -----------------------------------------
         elif name == "people_list_contacts":
             svc = _get_people(args["account"])
-            return _fmt(svc.list_contacts(int(args.get("max_results", 50))))
+            return _fmt(svc.list_contacts(
+                int(args.get("max_results", 50)),
+                page_token=args.get("page_token"),
+            ))
 
         # ---- people_search ------------------------------------------------
         elif name == "people_search":
@@ -2514,7 +2630,10 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
         # ---- people_list_other_contacts -----------------------------------
         elif name == "people_list_other_contacts":
             svc = _get_people(args["account"])
-            return _fmt(svc.list_other_contacts(int(args.get("max_results", 50))))
+            return _fmt(svc.list_other_contacts(
+                int(args.get("max_results", 50)),
+                page_token=args.get("page_token"),
+            ))
 
         # ---- people_list_groups -------------------------------------------
         elif name == "people_list_groups":
@@ -2909,7 +3028,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
     except ValueError as exc:
         return _fmt(f"Error: {exc}")
     except Exception as exc:
-        return _fmt(f"Error in '{name}': {type(exc).__name__}: {exc}")
+        return _fmt(f"Error in '{name}': {_describe(exc)}")
 
 
 # ---------------------------------------------------------------------------

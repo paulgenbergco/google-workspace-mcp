@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from gapi import RETRIES
+
 
 class SlidesService:
     def __init__(self, credentials: Credentials, account_name: str = ""):
@@ -16,7 +18,7 @@ class SlidesService:
         """Read all text from a presentation, organized by slide."""
         pres = self.service.presentations().get(
             presentationId=presentation_id
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         slides = []
         for i, slide in enumerate(pres.get("slides", []), 1):
@@ -46,7 +48,7 @@ class SlidesService:
         """Get presentation metadata (title, slide count, dimensions)."""
         pres = self.service.presentations().get(
             presentationId=presentation_id
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         page_size = pres.get("pageSize", {})
         width = page_size.get("width", {})
@@ -86,7 +88,7 @@ class SlidesService:
         """Create a new presentation."""
         pres = self.service.presentations().create(
             body={"title": title}
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "presentationId": pres.get("presentationId", ""),
@@ -113,7 +115,7 @@ class SlidesService:
         result = self.service.presentations().batchUpdate(
             presentationId=presentation_id,
             body={"requests": [request]},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         reply = result.get("replies", [{}])[0]
         object_id = reply.get("createSlide", {}).get("objectId", "")
@@ -147,7 +149,7 @@ class SlidesService:
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         replies = result.get("replies", [{}])
         occurrences = replies[0].get("replaceAllText", {}).get("occurrencesChanged", 0)
@@ -180,7 +182,7 @@ class SlidesService:
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "presentationId": presentation_id,
@@ -245,7 +247,7 @@ class SlidesService:
         result = self.service.presentations().batchUpdate(
             presentationId=presentation_id,
             body={"requests": requests},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "presentationId": presentation_id,
@@ -291,7 +293,7 @@ class SlidesService:
         self.service.presentations().batchUpdate(
             presentationId=presentation_id,
             body={"requests": requests},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "presentationId": presentation_id,
@@ -327,7 +329,7 @@ class SlidesService:
         self.service.presentations().batchUpdate(
             presentationId=presentation_id,
             body={"requests": requests},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "presentationId": presentation_id,
@@ -343,7 +345,7 @@ class SlidesService:
         self.service.presentations().batchUpdate(
             presentationId=presentation_id,
             body={"requests": [{"deleteObject": {"objectId": object_id}}]},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "presentationId": presentation_id,
@@ -359,7 +361,7 @@ class SlidesService:
         result = self.service.presentations().batchUpdate(
             presentationId=presentation_id,
             body={"requests": [{"duplicateObject": {"objectId": object_id}}]},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         reply = result.get("replies", [{}])[0]
         new_object_id = reply.get("duplicateObject", {}).get("objectId", "")
@@ -433,7 +435,7 @@ class SlidesService:
         self.service.presentations().batchUpdate(
             presentationId=presentation_id,
             body={"requests": [request]},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "presentationId": presentation_id,
@@ -451,7 +453,7 @@ class SlidesService:
         page = self.service.presentations().pages().get(
             presentationId=presentation_id,
             pageObjectId=slide_object_id,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         notes_id = (
             page["slideProperties"]["notesPage"]["notesProperties"][
@@ -477,13 +479,13 @@ class SlidesService:
             self.service.presentations().batchUpdate(
                 presentationId=presentation_id,
                 body={"requests": [delete_request, insert_request]},
-            ).execute()
+            ).execute(num_retries=RETRIES)
         except Exception:
             # deleteText errors when the notes shape is empty; retry insert only.
             self.service.presentations().batchUpdate(
                 presentationId=presentation_id,
                 body={"requests": [insert_request]},
-            ).execute()
+            ).execute(num_retries=RETRIES)
 
         return {
             "presentationId": presentation_id,

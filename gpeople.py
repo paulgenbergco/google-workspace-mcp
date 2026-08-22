@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Optional
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from gapi import RETRIES
+
 _PERSON_FIELDS = "names,emailAddresses,phoneNumbers,organizations,addresses,biographies,photos,birthdays,urls,nicknames,memberships,userDefined"
 
 
@@ -13,14 +15,17 @@ class PeopleService:
 
     # ------------------------------------------------------------------ read
 
-    def list_contacts(self, max_results: int = 50) -> Dict[str, Any]:
+    def list_contacts(
+        self, max_results: int = 50, page_token: Optional[str] = None
+    ) -> Dict[str, Any]:
         """List the user's contacts."""
         result = self.service.people().connections().list(
             resourceName="people/me",
             pageSize=min(max_results, 100),
+            pageToken=page_token,
             personFields=_PERSON_FIELDS,
             sortOrder="LAST_MODIFIED_DESCENDING",
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         contacts = [self._parse_person(p) for p in result.get("connections", [])]
         return {
@@ -35,7 +40,7 @@ class PeopleService:
             query=query,
             pageSize=min(max_results, 30),
             readMask=_PERSON_FIELDS,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         contacts = [
             self._parse_person(r.get("person", {}))
@@ -48,7 +53,7 @@ class PeopleService:
         person = self.service.people().get(
             resourceName=resource_name,
             personFields=_PERSON_FIELDS,
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return self._parse_person(person)
 
     # ------------------------------------------------------------------ write
@@ -87,7 +92,7 @@ class PeopleService:
         if urls:
             body["urls"] = [{"value": u} for u in urls]
 
-        person = self.service.people().createContact(body=body).execute()
+        person = self.service.people().createContact(body=body).execute(num_retries=RETRIES)
         return self._parse_person(person)
 
     def update_contact(
@@ -109,7 +114,7 @@ class PeopleService:
         existing = self.service.people().get(
             resourceName=resource_name,
             personFields=_PERSON_FIELDS,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         update_fields = []
 
@@ -159,22 +164,25 @@ class PeopleService:
             resourceName=resource_name,
             body=existing,
             updatePersonFields=",".join(update_fields),
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return self._parse_person(person)
 
     def delete_contact(self, resource_name: str) -> Dict[str, Any]:
         """Delete a contact."""
-        self.service.people().deleteContact(resourceName=resource_name).execute()
+        self.service.people().deleteContact(resourceName=resource_name).execute(num_retries=RETRIES)
         return {"deleted": True, "resource_name": resource_name}
 
     # ------------------------------------------------------------------ other contacts
 
-    def list_other_contacts(self, max_results: int = 50) -> Dict[str, Any]:
+    def list_other_contacts(
+        self, max_results: int = 50, page_token: Optional[str] = None
+    ) -> Dict[str, Any]:
         """List 'other contacts' (people you've interacted with but not saved)."""
         result = self.service.otherContacts().list(
             pageSize=min(max_results, 100),
+            pageToken=page_token,
             readMask="names,emailAddresses,phoneNumbers",
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         contacts = [self._parse_person(p) for p in result.get("otherContacts", [])]
         return {
@@ -189,7 +197,7 @@ class PeopleService:
         """List the user's contact groups (labels)."""
         result = self.service.contactGroups().list(
             pageSize=min(max_results, 100),
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         groups = [
             {
@@ -206,7 +214,7 @@ class PeopleService:
         """Create a new contact group (label)."""
         group = self.service.contactGroups().create(
             body={"contactGroup": {"name": name}},
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return {
             "resourceName": group.get("resourceName", ""),
             "name": group.get("formattedName", group.get("name", "")),
@@ -221,7 +229,7 @@ class PeopleService:
         result = self.service.contactGroups().members().modify(
             resourceName=group_resource_name,
             body={"resourceNamesToAdd": contact_resource_names},
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return result
 
     # ------------------------------------------------------------------ internals

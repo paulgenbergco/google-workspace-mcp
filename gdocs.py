@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Optional
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from gapi import RETRIES
+
 
 class DocsService:
     def __init__(self, credentials: Credentials, account_name: str = ""):
@@ -26,7 +28,7 @@ class DocsService:
         """Read the full text content of a Google Doc."""
         doc = self.service.documents().get(
             documentId=document_id, includeTabsContent=True
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         flat_tabs: List[Dict[str, Any]] = []
 
@@ -72,7 +74,7 @@ class DocsService:
 
     def create(self, title: str, body_text: str = "") -> Dict[str, Any]:
         """Create a new Google Doc, optionally with initial text."""
-        doc = self.service.documents().create(body={"title": title}).execute()
+        doc = self.service.documents().create(body={"title": title}).execute(num_retries=RETRIES)
         doc_id = doc["documentId"]
 
         if body_text:
@@ -88,7 +90,7 @@ class DocsService:
                         }
                     ]
                 },
-            ).execute()
+            ).execute(num_retries=RETRIES)
 
         return {
             "documentId": doc_id,
@@ -112,7 +114,7 @@ class DocsService:
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "documentId": document_id,
@@ -148,7 +150,7 @@ class DocsService:
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         replies = result.get("replies", [{}])
         occurrences = replies[0].get("replaceAllText", {}).get("occurrencesChanged", 0)
@@ -236,7 +238,7 @@ class DocsService:
         self.service.documents().batchUpdate(
             documentId=document_id,
             body={"requests": requests},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "documentId": document_id,
@@ -265,7 +267,7 @@ class DocsService:
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "documentId": document_id,
@@ -300,7 +302,7 @@ class DocsService:
         self.service.documents().batchUpdate(
             documentId=document_id,
             body={"requests": [{"insertInlineImage": insert_image}]},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "documentId": document_id,
@@ -323,7 +325,7 @@ class DocsService:
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "documentId": document_id,
@@ -364,7 +366,7 @@ class DocsService:
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "documentId": document_id,
@@ -379,7 +381,7 @@ class DocsService:
         result = self.service.documents().batchUpdate(
             documentId=document_id,
             body={"requests": requests},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "documentId": document_id,

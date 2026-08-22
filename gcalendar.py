@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from gapi import RETRIES
+
 
 class CalendarService:
     def __init__(self, credentials: Credentials, account_name: str = ""):
@@ -13,7 +15,7 @@ class CalendarService:
     # ------------------------------------------------------------------ calendars
 
     def list_calendars(self) -> List[Dict[str, Any]]:
-        result = self.service.calendarList().list().execute()
+        result = self.service.calendarList().list().execute(num_retries=RETRIES)
         return [
             {
                 "id": cal["id"],
@@ -34,6 +36,7 @@ class CalendarService:
         time_max: Optional[str] = None,
         max_results: int = 20,
         calendar_id: str = "primary",
+        page_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         params: Dict[str, Any] = {
@@ -45,8 +48,10 @@ class CalendarService:
         }
         if time_max:
             params["timeMax"] = time_max
+        if page_token:
+            params["pageToken"] = page_token
 
-        result = self.service.events().list(**params).execute()
+        result = self.service.events().list(**params).execute(num_retries=RETRIES)
         events = [self._parse_event(e) for e in result.get("items", [])]
         return {
             "calendar_id": calendar_id,
@@ -62,6 +67,7 @@ class CalendarService:
         time_max: Optional[str] = None,
         max_results: int = 20,
         calendar_id: str = "primary",
+        page_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         params: Dict[str, Any] = {
@@ -74,19 +80,22 @@ class CalendarService:
         }
         if time_max:
             params["timeMax"] = time_max
+        if page_token:
+            params["pageToken"] = page_token
 
-        result = self.service.events().list(**params).execute()
+        result = self.service.events().list(**params).execute(num_retries=RETRIES)
         events = [self._parse_event(e) for e in result.get("items", [])]
         return {
             "query": query,
             "count": len(events),
             "events": events,
+            "nextPageToken": result.get("nextPageToken"),
         }
 
     def get_event(self, event_id: str, calendar_id: str = "primary") -> Dict[str, Any]:
         event = self.service.events().get(
             calendarId=calendar_id, eventId=event_id
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return self._parse_event(event)
 
     # ------------------------------------------------------------------ write
@@ -148,7 +157,7 @@ class CalendarService:
         if add_meet:
             params["conferenceDataVersion"] = 1
 
-        result = self.service.events().insert(**params).execute()
+        result = self.service.events().insert(**params).execute(num_retries=RETRIES)
         return self._parse_event(result)
 
     def update_event(
@@ -192,14 +201,14 @@ class CalendarService:
 
         result = self.service.events().patch(
             calendarId=calendar_id, eventId=event_id, body=body, sendUpdates="all"
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return self._parse_event(result)
 
     def delete_event(self, event_id: str, calendar_id: str = "primary") -> Dict[str, Any]:
         """Delete a calendar event."""
         self.service.events().delete(
             calendarId=calendar_id, eventId=event_id, sendUpdates="all"
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return {"deleted": True, "event_id": event_id}
 
     def respond_to_event(
@@ -211,7 +220,7 @@ class CalendarService:
         """Respond to an event invitation (accepted, declined, tentative)."""
         event = self.service.events().get(
             calendarId=calendar_id, eventId=event_id
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         for attendee in event.get("attendees", []):
             if attendee.get("self"):
@@ -220,7 +229,7 @@ class CalendarService:
 
         result = self.service.events().update(
             calendarId=calendar_id, eventId=event_id, body=event, sendUpdates="all"
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return self._parse_event(result)
 
     def find_free_time(
@@ -235,7 +244,7 @@ class CalendarService:
             "timeMax": time_max,
             "items": [{"id": e} for e in emails],
         }
-        result = self.service.freebusy().query(body=body).execute()
+        result = self.service.freebusy().query(body=body).execute(num_retries=RETRIES)
 
         calendars = {}
         for email, info in result.get("calendars", {}).items():
@@ -257,7 +266,7 @@ class CalendarService:
         """Create an event from a natural-language string."""
         result = self.service.events().quickAdd(
             calendarId=calendar_id, text=text, sendUpdates="all"
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return self._parse_event(result)
 
     def move_event(
@@ -272,7 +281,7 @@ class CalendarService:
             eventId=event_id,
             destination=destination_calendar_id,
             sendUpdates="all",
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return self._parse_event(result)
 
     def list_instances(
@@ -294,7 +303,7 @@ class CalendarService:
         if time_max:
             params["timeMax"] = time_max
 
-        result = self.service.events().instances(**params).execute()
+        result = self.service.events().instances(**params).execute(num_retries=RETRIES)
         instances = [self._parse_event(e) for e in result.get("items", [])]
         return {
             "event_id": event_id,
@@ -315,7 +324,7 @@ class CalendarService:
         if time_zone:
             body["timeZone"] = time_zone
 
-        result = self.service.calendars().insert(body=body).execute()
+        result = self.service.calendars().insert(body=body).execute(num_retries=RETRIES)
         return {
             "calendarId": result.get("id", ""),
             "summary": result.get("summary", summary),
@@ -323,7 +332,7 @@ class CalendarService:
 
     def delete_calendar(self, calendar_id: str) -> Dict[str, Any]:
         """Delete a secondary calendar."""
-        self.service.calendars().delete(calendarId=calendar_id).execute()
+        self.service.calendars().delete(calendarId=calendar_id).execute(num_retries=RETRIES)
         return {"deleted": True, "calendar_id": calendar_id}
 
     def suggest_free_slots(
@@ -359,7 +368,7 @@ class CalendarService:
                 "timeMax": time_max,
                 "items": [{"id": e} for e in emails],
             }
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         # Merge all busy intervals across all calendars.
         busy: List[List[datetime]] = []

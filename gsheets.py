@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Optional
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from gapi import RETRIES
+
 
 class SheetsService:
     def __init__(self, credentials: Credentials, account_name: str = ""):
@@ -16,7 +18,7 @@ class SheetsService:
         ss = self.service.spreadsheets().get(
             spreadsheetId=spreadsheet_id,
             fields="spreadsheetId,properties.title,sheets.properties",
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         sheets = []
         for s in ss.get("sheets", []):
@@ -47,7 +49,7 @@ class SheetsService:
             spreadsheetId=spreadsheet_id,
             range=range,
             valueRenderOption=value_render,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         values = result.get("values", [])
         return {
@@ -69,7 +71,7 @@ class SheetsService:
             spreadsheetId=spreadsheet_id,
             range=range_str,
             valueRenderOption="FORMATTED_VALUE",
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         values = result.get("values", [])
 
@@ -115,7 +117,7 @@ class SheetsService:
                 {"properties": {"title": name}} for name in sheet_names
             ]
 
-        ss = self.service.spreadsheets().create(body=body).execute()
+        ss = self.service.spreadsheets().create(body=body).execute(num_retries=RETRIES)
         return {
             "spreadsheetId": ss.get("spreadsheetId", ""),
             "title": ss.get("properties", {}).get("title", ""),
@@ -139,7 +141,7 @@ class SheetsService:
             range=range,
             valueInputOption=input_option,
             body={"values": values},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "spreadsheetId": spreadsheet_id,
@@ -163,7 +165,7 @@ class SheetsService:
             valueInputOption=input_option,
             insertDataOption="INSERT_ROWS",
             body={"values": values},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         updates = result.get("updates", {})
         return {
@@ -182,7 +184,7 @@ class SheetsService:
                     {"addSheet": {"properties": {"title": title}}}
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         reply = result.get("replies", [{}])[0]
         props = reply.get("addSheet", {}).get("properties", {})
@@ -234,7 +236,7 @@ class SheetsService:
         result = self.service.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": requests},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "spreadsheetId": result.get("spreadsheetId", spreadsheet_id),
@@ -318,7 +320,7 @@ class SheetsService:
         self.service.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": [request]},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "spreadsheetId": spreadsheet_id,
@@ -331,7 +333,7 @@ class SheetsService:
             spreadsheetId=spreadsheet_id,
             range=range,
             body={},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "spreadsheetId": result.get("spreadsheetId", spreadsheet_id),
@@ -343,7 +345,7 @@ class SheetsService:
         self.service.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": [{"deleteSheet": {"sheetId": sheet_id}}]},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "spreadsheetId": spreadsheet_id,
@@ -372,7 +374,7 @@ class SheetsService:
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "spreadsheetId": spreadsheet_id,
@@ -394,7 +396,7 @@ class SheetsService:
         result = self.service.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": [{"duplicateSheet": duplicate}]},
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         reply = result.get("replies", [{}])[0]
         props = reply.get("duplicateSheet", {}).get("properties", {})
@@ -415,7 +417,7 @@ class SheetsService:
             spreadsheetId=spreadsheet_id,
             ranges=ranges,
             valueRenderOption=value_render,
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         value_ranges = [
             {
@@ -458,7 +460,7 @@ class SheetsService:
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "spreadsheetId": spreadsheet_id,
@@ -488,7 +490,7 @@ class SheetsService:
                     {"mergeCells": {"range": grid_range, "mergeType": merge_type}}
                 ]
             },
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         return {
             "spreadsheetId": spreadsheet_id,

@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from gapi import RETRIES
+
 
 class GmailService:
     def __init__(self, credentials: Credentials, account_name: str = ""):
@@ -21,7 +23,7 @@ class GmailService:
     # ------------------------------------------------------------------ profile
 
     def get_profile(self) -> Dict[str, Any]:
-        return self.service.users().getProfile(userId="me").execute()
+        return self.service.users().getProfile(userId="me").execute(num_retries=RETRIES)
 
     # ------------------------------------------------------------------ search / read
 
@@ -40,7 +42,7 @@ class GmailService:
         if page_token:
             params["pageToken"] = page_token
 
-        result = self.service.users().messages().list(**params).execute()
+        result = self.service.users().messages().list(**params).execute(num_retries=RETRIES)
         raw_messages = result.get("messages", [])
 
         messages = []
@@ -60,7 +62,7 @@ class GmailService:
         return self._parse_message(msg)
 
     def get_thread(self, thread_id: str) -> Dict[str, Any]:
-        thread = self.service.users().threads().get(userId="me", id=thread_id).execute()
+        thread = self.service.users().threads().get(userId="me", id=thread_id).execute(num_retries=RETRIES)
         messages = [self._parse_message(m) for m in thread.get("messages", [])]
         return {
             "id": thread["id"],
@@ -80,8 +82,15 @@ class GmailService:
         html_body: str = "",
         attachments: Optional[List[str]] = None,
         headers: Optional[Dict[str, str]] = None,
+        from_alias: str = "",
     ) -> str:
-        """Build a MIME message and return the raw base64url-encoded string."""
+        """Build a MIME message and return the raw base64url-encoded string.
+
+        ``from_alias`` sets the From header. Gmail only accepts an address that
+        is a verified send-as alias on the account (see ``list_send_as``);
+        anything else is rejected with a 400. Both "alias@example.com" and
+        "Display Name <alias@example.com>" are accepted.
+        """
         if html_body or attachments:
             msg: MIMEText | MIMEMultipart = MIMEMultipart("mixed")
             alt = MIMEMultipart("alternative")
@@ -111,6 +120,8 @@ class GmailService:
 
         msg["to"] = to
         msg["subject"] = subject
+        if from_alias:
+            msg["from"] = from_alias
         if cc:
             msg["cc"] = cc
         if bcc:
@@ -130,9 +141,11 @@ class GmailService:
         html_body: str = "",
         attachments: Optional[List[str]] = None,
         thread_id: Optional[str] = None,
+        from_alias: str = "",
     ) -> Dict[str, Any]:
         raw = self._build_message(
-            to, subject, body, cc, bcc, html_body, attachments
+            to, subject, body, cc, bcc, html_body, attachments,
+            from_alias=from_alias,
         )
         body_payload: Dict[str, Any] = {"raw": raw}
         if thread_id:
@@ -140,7 +153,7 @@ class GmailService:
 
         return self.service.users().messages().send(
             userId="me", body=body_payload
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def create_draft(
         self,
@@ -152,9 +165,11 @@ class GmailService:
         html_body: str = "",
         attachments: Optional[List[str]] = None,
         thread_id: Optional[str] = None,
+        from_alias: str = "",
     ) -> Dict[str, Any]:
         raw = self._build_message(
-            to, subject, body, cc, bcc, html_body, attachments
+            to, subject, body, cc, bcc, html_body, attachments,
+            from_alias=from_alias,
         )
         message: Dict[str, Any] = {"raw": raw}
         if thread_id:
@@ -162,7 +177,7 @@ class GmailService:
 
         return self.service.users().drafts().create(
             userId="me", body={"message": message}
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def reply_message(
         self,
@@ -171,6 +186,7 @@ class GmailService:
         reply_all: bool = False,
         html_body: str = "",
         attachments: Optional[List[str]] = None,
+        from_alias: str = "",
     ) -> Dict[str, Any]:
         original = self._get_raw_message(message_id, format="full")
         payload = original.get("payload", {})
@@ -197,11 +213,12 @@ class GmailService:
                 for addr in ",".join(extra).split(",")
                 if addr.strip()
             ]
-            if own_address:
+            own = [a.lower() for a in (own_address, from_alias) if a]
+            if own:
                 recipients = [
                     addr
                     for addr in recipients
-                    if own_address.lower() not in addr.lower()
+                    if not any(a in addr.lower() for a in own)
                 ]
             cc = ", ".join(recipients)
 
@@ -228,6 +245,7 @@ class GmailService:
             html_body=html_body,
             attachments=attachments,
             headers=reply_headers,
+            from_alias=from_alias,
         )
         body_payload: Dict[str, Any] = {"raw": raw}
         thread_id = original.get("threadId")
@@ -236,7 +254,7 @@ class GmailService:
 
         return self.service.users().messages().send(
             userId="me", body=body_payload
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def forward_message(
         self,
@@ -245,6 +263,7 @@ class GmailService:
         body: str = "",
         cc: str = "",
         bcc: str = "",
+        from_alias: str = "",
     ) -> Dict[str, Any]:
         original = self._get_raw_message(message_id, format="full")
         parsed = self._parse_message(original)
@@ -262,18 +281,20 @@ class GmailService:
         orig_subject = parsed.get("subject", "")
         subject = "Fwd: " + orig_subject
 
-        return self.send_message(to, subject, forwarded, cc=cc, bcc=bcc)
+        return self.send_message(
+            to, subject, forwarded, cc=cc, bcc=bcc, from_alias=from_alias
+        )
 
     def list_drafts(self, max_results: int = 20) -> List[Dict[str, Any]]:
         result = self.service.users().drafts().list(
             userId="me", maxResults=min(max_results, 50)
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         drafts = []
         for draft in result.get("drafts", []):
             details = self.service.users().drafts().get(
                 userId="me", id=draft["id"], format="full"
-            ).execute()
+            ).execute(num_retries=RETRIES)
             msg = self._parse_message(details.get("message", {}))
             msg["draft_id"] = draft["id"]
             drafts.append(msg)
@@ -286,7 +307,7 @@ class GmailService:
         """Send an existing draft."""
         result = self.service.users().drafts().send(
             userId="me", body={"id": draft_id}
-        ).execute()
+        ).execute(num_retries=RETRIES)
         msg = result.get("message", result)
         return {
             "status": "sent",
@@ -316,7 +337,7 @@ class GmailService:
 
         att = self.service.users().messages().attachments().get(
             userId="me", messageId=message_id, id=attachment_id
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
         data = att.get("data", "")
         raw = base64.urlsafe_b64decode(data.encode())
@@ -377,7 +398,7 @@ class GmailService:
     # ------------------------------------------------------------------ labels
 
     def list_labels(self) -> List[Dict[str, Any]]:
-        result = self.service.users().labels().list(userId="me").execute()
+        result = self.service.users().labels().list(userId="me").execute(num_retries=RETRIES)
         return [
             {"id": lbl["id"], "name": lbl["name"], "type": lbl.get("type", "")}
             for lbl in result.get("labels", [])
@@ -423,17 +444,17 @@ class GmailService:
 
         return self.service.users().messages().modify(
             userId="me", id=message_id, body=body
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def trash_message(self, message_id: str) -> Dict[str, Any]:
         return self.service.users().messages().trash(
             userId="me", id=message_id
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def untrash_message(self, message_id: str) -> Dict[str, Any]:
         return self.service.users().messages().untrash(
             userId="me", id=message_id
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def create_label(
         self,
@@ -448,7 +469,7 @@ class GmailService:
         }
         return self.service.users().labels().create(
             userId="me", body=body
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def update_label(
         self,
@@ -467,12 +488,12 @@ class GmailService:
 
         return self.service.users().labels().patch(
             userId="me", id=label_id, body=body
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def delete_label(self, label_id: str) -> Dict[str, Any]:
         self.service.users().labels().delete(
             userId="me", id=label_id
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return {"deleted": True, "label_id": label_id}
 
     def batch_modify(
@@ -489,7 +510,7 @@ class GmailService:
 
         self.service.users().messages().batchModify(
             userId="me", body=body
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return {"modified": len(message_ids)}
 
     def modify_thread_labels(
@@ -506,7 +527,7 @@ class GmailService:
 
         return self.service.users().threads().modify(
             userId="me", id=thread_id, body=body
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def mark_read(self, message_id: str) -> Dict[str, Any]:
         return self.modify_labels(message_id, remove_labels=["UNREAD"])
@@ -516,10 +537,34 @@ class GmailService:
 
     # ------------------------------------------------------------------ filters
 
+    def list_send_as(self) -> List[Dict[str, Any]]:
+        """List the addresses this account may send as (primary + aliases).
+
+        Only entries with verificationStatus 'accepted' (or the primary address,
+        which has none) can be used as ``from_alias``.
+        """
+        result = self.service.users().settings().sendAs().list(
+            userId="me"
+        ).execute(num_retries=RETRIES)
+        return [
+            {
+                "sendAsEmail": s.get("sendAsEmail", ""),
+                "displayName": s.get("displayName", ""),
+                "isPrimary": s.get("isPrimary", False),
+                "isDefault": s.get("isDefault", False),
+                "treatAsAlias": s.get("treatAsAlias", False),
+                "verificationStatus": s.get("verificationStatus", ""),
+                "replyToAddress": s.get("replyToAddress", ""),
+                "usable": s.get("isPrimary", False)
+                or s.get("verificationStatus", "") == "accepted",
+            }
+            for s in result.get("sendAs", [])
+        ]
+
     def list_filters(self) -> Dict[str, Any]:
         return self.service.users().settings().filters().list(
             userId="me"
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def create_filter(
         self,
@@ -528,12 +573,12 @@ class GmailService:
     ) -> Dict[str, Any]:
         return self.service.users().settings().filters().create(
             userId="me", body={"criteria": criteria, "action": action}
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def delete_filter(self, filter_id: str) -> Dict[str, Any]:
         self.service.users().settings().filters().delete(
             userId="me", id=filter_id
-        ).execute()
+        ).execute(num_retries=RETRIES)
         return {"deleted": True, "filter_id": filter_id}
 
     # ------------------------------------------------------------------ vacation
@@ -541,7 +586,7 @@ class GmailService:
     def get_vacation(self) -> Dict[str, Any]:
         return self.service.users().settings().getVacation(
             userId="me"
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def set_vacation(
         self,
@@ -572,14 +617,14 @@ class GmailService:
 
         return self.service.users().settings().updateVacation(
             userId="me", body=vacation_body
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     # ------------------------------------------------------------------ internals
 
     def _get_raw_message(self, message_id: str, format: str = "full") -> Dict[str, Any]:
         return self.service.users().messages().get(
             userId="me", id=message_id, format=format
-        ).execute()
+        ).execute(num_retries=RETRIES)
 
     def _parse_message(self, msg: Dict[str, Any]) -> Dict[str, Any]:
         payload = msg.get("payload", {})

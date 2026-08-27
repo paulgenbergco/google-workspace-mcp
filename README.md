@@ -109,7 +109,7 @@ All 110 tools will appear automatically.
 
 | Tool | Description |
 |------|-------------|
-| `list_accounts` | List all configured accounts and their auth status |
+| `list_accounts` | List all configured accounts and their auth status; `verify: true` also confirms each token's real identity against Google and flags any that disagrees with `config.json` |
 | `gmail_get_profile` | Get account profile and mailbox stats |
 | `gmail_search` | Search emails using Gmail query syntax (one or all accounts) |
 | `gmail_read_message` | Read the full content of a message |

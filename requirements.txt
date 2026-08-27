@@ -1,4 +1,6 @@
-mcp>=1.0.0
+# mcp 2.x removed the lowlevel Server decorator API (@server.list_tools /
+# @server.call_tool) that server.py is built on — pin below it.
+mcp>=1.0.0,<2
 google-api-python-client>=2.100.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0

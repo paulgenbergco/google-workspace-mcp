@@ -13,7 +13,8 @@ Forked from `DiegoMaldonadoRosas/gmail-mcp` (`upstream` remote); Drive, Contacts
 ```bash
 bash setup.sh                      # first-time: venv + deps + credentials dirs + config.json
 source .venv/bin/activate
-python setup_auth.py               # OAuth browser flow per account; skips already-authenticated ones
+python setup_auth.py               # OAuth browser flow per account; prompts 'Re-authenticate? [y/N]'
+                                   # on ones that already have a token
 pre-commit run --all-files         # whitespace/EOF/YAML/JSON/large-file/Python-AST checks
                                    # (not installed by setup.sh: pip install pre-commit first)
 ```
@@ -69,7 +70,7 @@ Only `gmail_search` and `drive_search` accept an omitted `account`. Both go thro
 
 ## Account model
 
-`config.json` (gitignored) maps a short account key to an email and description. The key, not the email, is what tools take as `account`. Currently: `genberg`, `alai`, `lvlon`, `cloe`, `banks`. `credentials/` is gitignored in full, including `credentials/tokens_bak/` (manual backups kept before re-auth).
+`config.json` (gitignored) maps a short account key to an email and description. The key, not the email, is what tools take as `account`. Keys in use: `genberg`, `alai`, `lvlon`, `cloe` on the laptop, plus `banks` on the Clawdette deployment (a separate Mac mini running the banks daemon, which needs that account's access). Each machine's `config.json` carries only the accounts it uses, so a key absent from one machine is not retired. `credentials/` is gitignored in full, including `credentials/tokens_bak/` (manual backups kept before re-auth).
 
 ## Gotchas
 
@@ -79,4 +80,5 @@ Only `gmail_search` and `drive_search` accept an omitted `account`. Both go thro
 - **Gmail label arguments accept names or IDs.** `GmailService._resolve_label_ids` maps names to IDs, passes system labels through, and auto-creates unknown names on *adds* only (removes silently no-op). Tool schemas should describe labels as names.
 - **Docs tools are tab-aware.** `docs_get` walks nested `childTabs` and flattens them; write/format/replace take an optional `tab_id` threaded into the API `location`/`tabsCriteria`. A Docs change that ignores tabs will silently hit the first tab only.
 - **Sending from an alias needs a verified send-as entry.** `from_alias` on `gmail_send` / `gmail_create_draft` / `gmail_reply` / `gmail_forward` sets the From header, but Gmail rejects any address that is not a verified send-as on that account. `gmail_list_send_as` reports which are usable. No extra scope is needed — `gmail.settings.basic` already covers it.
+- **`list_accounts` reports the configured email, not the token's.** The `email` field comes straight out of `config.json` and is not evidence of who the stored token signs in as. Editing an account's email without re-running `setup_auth.py` leaves it reading `ready` while every call still runs as the previous account. Pass `verify: true` to check each authenticated token against Google (`getProfile`, one call per account, concurrent) and flag any that disagrees — use it after changing an email or re-authenticating.
 - **The three `*_batch_update` tools are raw API passthroughs** (Docs/Sheets/Slides). Prefer adding a typed tool over telling callers to hand-write request JSON.

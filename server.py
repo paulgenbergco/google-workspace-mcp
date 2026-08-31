@@ -119,6 +119,46 @@ async def _fan_out(call, empty_key: str) -> list[dict]:
     return list(await asyncio.gather(*(one(acct) for acct in _accounts)))
 
 
+async def _verify_identities(rows: list[dict]) -> None:
+    """Annotate `rows` in place with each token's real Google identity.
+
+    `list_accounts` otherwise echoes the email straight out of config.json, so
+    an account whose config was edited without re-running setup_auth.py reads
+    as correct while every call still runs as the previous account. One
+    getProfile per authenticated account, concurrently.
+    """
+
+    def identity(acct: str) -> str:
+        return _get_service(acct).get_profile().get("emailAddress", "")
+
+    async def one(row: dict) -> None:
+        if not row["authenticated"]:
+            return
+        try:
+            actual = await asyncio.to_thread(identity, row["name"])
+        except Exception as exc:
+            row["verified_email"] = None
+            row["verify_error"] = _describe(exc)
+            row["status"] = "ready — token identity could not be verified"
+            return
+
+        configured = row["email"]
+        row["verified_email"] = actual
+        row["email_mismatch"] = bool(
+            configured and actual and actual.lower() != configured.lower()
+        )
+        if row["email_mismatch"]:
+            row["status"] = (
+                f"MISMATCH — this token is for {actual}, but config.json says "
+                f"{configured}. Every call on '{row['name']}' runs as {actual}. "
+                "Re-run setup_auth.py and sign in as the configured account."
+            )
+        else:
+            row["status"] = "ready — token identity verified"
+
+    await asyncio.gather(*(one(row) for row in rows))
+
+
 def _fmt(data: Any) -> list[types.TextContent]:
     if isinstance(data, str):
         return [types.TextContent(type="text", text=data)]
@@ -202,10 +242,26 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="list_accounts",
             description=(
-                "List all Gmail accounts configured in this MCP server, "
-                "along with their authentication status."
+                "List all Google accounts configured in this MCP server, along with "
+                "their authentication status. By default the email shown is the one "
+                "recorded in config.json, which is not proof of what the stored token "
+                "actually signs in as — pass verify=true to check that against Google."
             ),
-            inputSchema={"type": "object", "properties": {}},
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "verify": {
+                        "type": "boolean",
+                        "description": (
+                            "Confirm each authenticated account's token against Google and "
+                            "report the identity it really signs in as as 'verified_email', "
+                            "flagging any that disagrees with config.json. Costs one API "
+                            "call per account, so it is off by default. Use it after "
+                            "editing an email in config.json or re-authenticating."
+                        ),
+                    }
+                },
+            },
         ),
         types.Tool(
             name="gmail_get_profile",
@@ -2010,6 +2066,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
     try:
         # ---- list_accounts ------------------------------------------------
         if name == "list_accounts":
+            verify: bool = bool(args.get("verify", False))
             result = []
             for acct, info in _accounts.items():
                 authenticated = _auth.is_authenticated(acct)
@@ -2020,6 +2077,8 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
                     "authenticated": authenticated,
                     "status": "ready" if authenticated else "not authenticated — run setup_auth.py",
                 })
+            if verify:
+                await _verify_identities(result)
             return _fmt(result)
 
         # ---- gmail_get_profile --------------------------------------------

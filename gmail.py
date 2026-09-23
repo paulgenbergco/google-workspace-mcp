@@ -167,9 +167,37 @@ class GmailService:
         thread_id: Optional[str] = None,
         from_alias: str = "",
     ) -> Dict[str, Any]:
+        reply_headers: Dict[str, str] = {}
+        if thread_id:
+            # A bare threadId only buckets a draft for display; Gmail (and any
+            # other client reading the thread) requires In-Reply-To/References
+            # matching RFC 2822 to actually treat it as a reply once sent.
+            # Derive them from the last message currently in the thread.
+            try:
+                thread = self.service.users().threads().get(
+                    userId="me", id=thread_id, format="metadata",
+                    metadataHeaders=["Message-Id", "References"],
+                ).execute(num_retries=RETRIES)
+                last_msgs = thread.get("messages", [])
+                if last_msgs:
+                    last_headers: Dict[str, str] = {}
+                    for h in last_msgs[-1].get("payload", {}).get("headers", []):
+                        last_headers[h["name"].lower()] = h["value"]
+                    orig_message_id = last_headers.get("message-id", "")
+                    if orig_message_id:
+                        reply_headers["In-Reply-To"] = orig_message_id
+                        existing_refs = last_headers.get("references", "")
+                        reply_headers["References"] = (
+                            (existing_refs + " " + orig_message_id).strip()
+                            if existing_refs
+                            else orig_message_id
+                        )
+            except Exception:
+                pass
+
         raw = self._build_message(
             to, subject, body, cc, bcc, html_body, attachments,
-            from_alias=from_alias,
+            headers=reply_headers, from_alias=from_alias,
         )
         message: Dict[str, Any] = {"raw": raw}
         if thread_id:

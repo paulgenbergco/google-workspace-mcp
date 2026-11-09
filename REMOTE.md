@@ -23,26 +23,28 @@ Do steps 1 to 4 on Clawdette. Steps 5 and 6 are in a browser.
 
 ### 1. Code and dependencies
 
-The banks daemon uses the existing checkout. Use a **separate clone** for the remote server, so adding your accounts here does not hand them to that daemon too.
+Clawdette already has a checkout at `~/Dev/google-workspace-mcp`. Leave it alone and make a **separate clone** next to it, so the remote server can be pulled and restarted without touching whatever runs from the existing one (the banks daemon).
 
 ```bash
-cd ~ && git clone https://github.com/paulgenbergco/google-workspace-mcp.git google-workspace-mcp-remote
-cd ~/google-workspace-mcp-remote
+cd ~/Dev && git clone https://github.com/paulgenbergco/google-workspace-mcp.git google-workspace-mcp-remote
+cd ~/Dev/google-workspace-mcp-remote
 bash setup.sh                       # venv + deps (now includes uvicorn)
 ```
 
 ### 2. Accounts and tokens
 
-Copy the laptop's Google client and tokens. This avoids running the browser flow on the Mac mini. Run these **on the laptop** (`clawdette` here is your SSH alias for the Mac mini):
+Copy them from the existing checkout first, then fill any gaps.
 
 ```bash
-cd ~/google-workspace-mcp
-scp credentials/client_secret.json clawdette:google-workspace-mcp-remote/credentials/
-scp credentials/tokens/{genberg,alai,lvlon,cloe}.json clawdette:google-workspace-mcp-remote/credentials/tokens/
-scp config.json clawdette:google-workspace-mcp-remote/config.json
+cd ~/Dev/google-workspace-mcp-remote
+cp ../google-workspace-mcp/config.json .
+cp ../google-workspace-mcp/credentials/client_secret.json credentials/
+cp ../google-workspace-mcp/credentials/tokens/*.json credentials/tokens/
+.venv/bin/python -c "import json;print(list(json.load(open('config.json'))['accounts']))"
+ls credentials/tokens
 ```
 
-The tokens are tied to the client in `client_secret.json`, so copy both together. Both machines can safely use the same tokens. To also expose `banks`, copy its token from the old checkout on Clawdette and add it to `config.json`.
+Every account you want on claude.ai needs a `config.json` entry **and** a token file. For any that are missing (for example the laptop's `genberg`, `alai`, `lvlon`, `cloe`), add the entry to `config.json` and run `.venv/bin/python setup_auth.py` here. It opens a browser on Clawdette and only prompts for accounts without a token. Copying the token files from the laptop's `credentials/tokens/` also works, as long as both machines use the same `client_secret.json`.
 
 ### 3. Public HTTPS with Tailscale Funnel
 

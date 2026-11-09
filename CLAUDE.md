@@ -42,6 +42,8 @@ PY
 
 Running `python server.py` directly just blocks on stdin waiting for MCP frames — it's only useful to confirm it doesn't crash at startup.
 
+`python server.py --http` is remote mode (see below and `REMOTE.md`): it needs a `remote` block in `config.json` and `credentials/remote_client_secret.json`, and refuses to start without them. `bash deploy/install-launchd.sh` installs it as a macOS launchd agent.
+
 ## Architecture
 
 Three layers, and a change to any tool almost always touches all three:
@@ -68,13 +70,24 @@ Only `gmail_search` and `drive_search` accept an omitted `account`. Both go thro
 
 `page_token` is only wired into the single-account path of those two tools: page tokens are per-account and cannot be reused across a fan-out.
 
+### Remote mode
+
+`remote.py` serves the same `server` object over Streamable HTTP at `/mcp` for claude.ai custom connectors (which is how cloud Claude Code sessions reach it). It is its own OAuth authorization server: claude.ai registers via DCR, `/authorize` forwards to Google sign-in (`openid email` only, on a separate *Web* OAuth client), and `/oauth/google/callback` issues a code only to an address in `remote.allowed_emails`. Clients and SHA-256-hashed tokens persist in `credentials/remote_state.json`. Setup runbook: `REMOTE.md`.
+
+Two server.py behaviors switch on `_REMOTE`:
+- **Local-path args are stripped and refused.** Any argument named in `_LOCAL_PATH_ARGS` (`save_path`, `source_path`, `attachments`) is removed from every schema in `list_tools()` and rejected in `call_tool()`, because over HTTP those paths point at the host's disk. A new tool that takes a local path must use one of those names or be added to the set.
+- **Binary results go through `_fmt_binary()`**, which turns a temp `file_path` or `data_base64` into an MCP image/blob content block. Route any new tool that returns bytes through it.
+
+DCR redirect URIs are pinned to claude.ai's callback plus loopback (`DEFAULT_ALLOWED_REDIRECTS`, overridable via `remote.allowed_redirect_uris`). Don't loosen that: open registration plus a silent Google login is a token-theft path.
+
 ## Account model
 
-`config.json` (gitignored) maps a short account key to an email and description. The key, not the email, is what tools take as `account`. Keys in use: `genberg`, `alai`, `lvlon`, `cloe` on the laptop, plus `banks` on the Clawdette deployment (a separate Mac mini running the banks daemon, which needs that account's access). Each machine's `config.json` carries only the accounts it uses, so a key absent from one machine is not retired. `credentials/` is gitignored in full, including `credentials/tokens_bak/` (manual backups kept before re-auth).
+`config.json` (gitignored) maps a short account key to an email and description. The key, not the email, is what tools take as `account`. Keys in use: `genberg`, `alai`, `lvlon`, `cloe` on the laptop, plus `banks` on the Clawdette deployment (a separate Mac mini running the banks daemon, which needs that account's access). The remote-mode server is meant to run on Clawdette from a separate clone (`~/google-workspace-mcp-remote`), so the banks daemon's checkout keeps only `banks`. Each machine's `config.json` carries only the accounts it uses, so a key absent from one machine is not retired. `credentials/` is gitignored in full, including `credentials/tokens_bak/` (manual backups kept before re-auth).
 
 ## Gotchas
 
 - **Changing `SCOPES` in `auth.py` requires re-running `setup_auth.py` for every account.** Existing tokens keep working for old scopes and fail at call time on the new ones. When adding a scope, say so in the README's upgrade note.
+- **Remote mode on Clawdette needs a service restart after `git pull`** (`bash deploy/install-launchd.sh`); claude.ai keeps its connection and reconnects.
 - **Editing `server.py` or any wrapper needs a Claude restart**, not just a file save — the client spawns the stdio server once per session, so a running Claude holds the old code.
 - **Binary payloads never come back as base64 by default.** `gmail_download_attachment` and `drive_read_content` write to `save_path` if given; otherwise text-ish MIME types decode to `content` and true binaries go to a temp file whose path is returned as `file_path`. Preserve that when touching either — the point is to keep base64 blobs out of the model's context.
 - **Gmail label arguments accept names or IDs.** `GmailService._resolve_label_ids` maps names to IDs, passes system labels through, and auto-creates unknown names on *adds* only (removes silently no-op). Tool schemas should describe labels as names.

@@ -9,5 +9,10 @@
       "description": "Work account"
     }
   },
-  "credentials_dir": "./credentials"
+  "credentials_dir": "./credentials",
+  "remote": {
+    "public_url": "https://your-host.your-tailnet.ts.net",
+    "allowed_emails": ["your.personal@gmail.com"],
+    "port": 8765
+  }
 }

@@ -82,7 +82,7 @@ DCR redirect URIs are pinned to claude.ai's callback plus loopback (`DEFAULT_ALL
 
 ## Account model
 
-`config.json` (gitignored) maps a short account key to an email and description. The key, not the email, is what tools take as `account`. Keys in use: `genberg`, `alai`, `lvlon`, `cloe` on the laptop, plus `banks` on the Clawdette deployment (a separate Mac mini running the banks daemon, which needs that account's access). Clawdette's existing checkout is `~/Dev/google-workspace-mcp`; the remote-mode server is meant to run from a separate clone beside it (`~/Dev/google-workspace-mcp-remote`) so it can be pulled and restarted independently. Each machine's `config.json` carries only the accounts it uses, so a key absent from one machine is not retired. `credentials/` is gitignored in full, including `credentials/tokens_bak/` (manual backups kept before re-auth).
+`config.json` (gitignored) maps a short account key to an email and description. The key, not the email, is what tools take as `account`. Keys in use: `genberg`, `alai`, `lvlon`, `cloe` on the laptop, plus `banks` on Clawdette (a Mac mini at `~/Dev/google-workspace-mcp`). On Clawdette, the cloe and banks agents share one checkout and the same accounts, with different purposes. Remote mode runs from that same checkout. Each machine's `config.json` carries only the accounts it uses, so a key absent from one machine is not retired. `credentials/` is gitignored in full, including `credentials/tokens_bak/` (manual backups kept before re-auth).
 
 ## Gotchas
 

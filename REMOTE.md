@@ -23,28 +23,22 @@ Do steps 1 to 4 on Clawdette. Steps 5 and 6 are in a browser.
 
 ### 1. Code and dependencies
 
-Clawdette already has a checkout at `~/Dev/google-workspace-mcp`. Leave it alone and make a **separate clone** next to it, so the remote server can be pulled and restarted without touching whatever runs from the existing one (the banks daemon).
+Use the existing checkout at `~/Dev/google-workspace-mcp`. Remote mode only adds files and a `remote` block in `config.json`, which stdio mode ignores, so the agents that already use this checkout are unaffected.
 
 ```bash
-cd ~/Dev && git clone https://github.com/paulgenbergco/google-workspace-mcp.git google-workspace-mcp-remote
-cd ~/Dev/google-workspace-mcp-remote
-bash setup.sh                       # venv + deps (now includes uvicorn)
+cd ~/Dev/google-workspace-mcp
+git pull                                    # after PR #3 is merged (before that: git fetch && git checkout claude/vibrant-lovelace-rlwa9c)
+.venv/bin/pip install -r requirements.txt   # adds uvicorn
 ```
 
 ### 2. Accounts and tokens
 
-Copy them from the existing checkout first, then fill any gaps.
-
 ```bash
-cd ~/Dev/google-workspace-mcp-remote
-cp ../google-workspace-mcp/config.json .
-cp ../google-workspace-mcp/credentials/client_secret.json credentials/
-cp ../google-workspace-mcp/credentials/tokens/*.json credentials/tokens/
 .venv/bin/python -c "import json;print(list(json.load(open('config.json'))['accounts']))"
 ls credentials/tokens
 ```
 
-Every account you want on claude.ai needs a `config.json` entry **and** a token file. For any that are missing (for example the laptop's `genberg`, `alai`, `lvlon`, `cloe`), add the entry to `config.json` and run `.venv/bin/python setup_auth.py` here. It opens a browser on Clawdette and only prompts for accounts without a token. Copying the token files from the laptop's `credentials/tokens/` also works, as long as both machines use the same `client_secret.json`.
+Every account you want on claude.ai needs a `config.json` entry **and** a token file. For any that are missing, add the entry and run `.venv/bin/python setup_auth.py`. It only prompts for accounts without a token.
 
 ### 3. Public HTTPS with Tailscale Funnel
 

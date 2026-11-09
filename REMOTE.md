@@ -27,9 +27,13 @@ Use the existing checkout at `~/Dev/google-workspace-mcp`. Remote mode only adds
 
 ```bash
 cd ~/Dev/google-workspace-mcp
-git pull                                    # after PR #3 is merged (before that: git fetch && git checkout claude/vibrant-lovelace-rlwa9c)
-.venv/bin/pip install -r requirements.txt   # adds uvicorn
+git pull
+.venv/bin/python -m pip install -r requirements.txt
 ```
+
+`git pull` assumes PR #3 is merged. Before that, run `git fetch && git checkout claude/vibrant-lovelace-rlwa9c` instead. The install adds uvicorn. Use `python -m pip`, not `.venv/bin/pip`: if the folder was ever moved, the venv's `pip` script still points at the old path and fails with "bad interpreter", while `python -m pip` keeps working.
+
+The command blocks in this file contain no `#` comments, because zsh does not treat `#` as a comment when you paste at the prompt.
 
 ### 2. Accounts and tokens
 
@@ -43,9 +47,11 @@ Every account you want on claude.ai needs a `config.json` entry **and** a token 
 ### 3. Public HTTPS with Tailscale Funnel
 
 ```bash
-tailscale funnel --bg 8765          # macOS app: /Applications/Tailscale.app/Contents/MacOS/Tailscale funnel --bg 8765
-tailscale funnel status             # prints https://<machine>.<tailnet>.ts.net
+tailscale funnel --bg 8765
+tailscale funnel status
 ```
+
+`tailscale funnel status` prints `https://<machine>.<tailnet>.ts.net`. If `tailscale` is not on your PATH, use the macOS app's copy: `/Applications/Tailscale.app/Contents/MacOS/Tailscale`.
 
 The first run may print a link to turn on Funnel and HTTPS for the tailnet. Approve it, then rerun. Write down the `https://...ts.net` URL. It is your **public URL** in the steps below.
 
@@ -71,11 +77,13 @@ Add a `remote` block to `config.json`:
 ```
 
 ```bash
-bash deploy/install-launchd.sh                                # starts now and at every login, restarts on crash
-curl -s http://127.0.0.1:8765/healthz                         # {"ok":true}
-curl -s https://<public URL>/.well-known/oauth-protected-resource/mcp   # JSON, from the outside
+bash deploy/install-launchd.sh
+curl -s http://127.0.0.1:8765/healthz
+curl -s https://<public URL>/.well-known/oauth-protected-resource/mcp
 tail -f ~/Library/Logs/gworkspace-mcp/server.log
 ```
+
+The installer starts the server now and at every login, and restarts it if it crashes. The first `curl` should print `{"ok":true}`. The second should return JSON, which proves the server is reachable from outside.
 
 ### 6. Add the connector on claude.ai
 

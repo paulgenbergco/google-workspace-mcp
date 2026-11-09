@@ -277,6 +277,11 @@ class GoogleLoginProvider:
         self.store = StateStore(settings.state_path)
         self._pending: dict[str, _PendingLogin] = {}
         self._codes: dict[str, AuthorizationCode] = {}
+        # Who signed in, and for which resource, per code. Kept here rather
+        # than read back off the SDK's AuthorizationCode / RefreshToken,
+        # because older mcp 1.x models have no `subject` (or `resource`)
+        # field and silently drop the value passed in.
+        self._code_identity: dict[str, tuple[str, str | None]] = {}
 
     # ---- clients ----------------------------------------------------------
 
@@ -349,9 +354,10 @@ class GoogleLoginProvider:
             code_challenge=params.code_challenge,
             redirect_uri=params.redirect_uri,
             redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
-            resource=params.resource,
+            resource=getattr(params, "resource", None),
             subject=email,
         )
+        self._code_identity[code] = (email, getattr(params, "resource", None))
         _log(f"signed in {email} for client {pending.client_id}")
         return RedirectResponse(
             construct_redirect_uri(str(params.redirect_uri), code=code, state=params.state), status_code=302
@@ -390,9 +396,11 @@ class GoogleLoginProvider:
         return None
 
     async def exchange_authorization_code(self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode) -> OAuthToken:
-        if self._codes.pop(authorization_code.code, None) is None:
+        identity = self._code_identity.pop(authorization_code.code, None)
+        if self._codes.pop(authorization_code.code, None) is None or identity is None:
             raise TokenError(error="invalid_grant", error_description="authorization code already used")
-        return self._issue(client.client_id, authorization_code.scopes, authorization_code.subject, authorization_code.resource)
+        email, resource = identity
+        return self._issue(client.client_id, authorization_code.scopes, email, resource)
 
     async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str):
         rec = self.store.get("refresh", _hash(refresh_token))
@@ -404,9 +412,10 @@ class GoogleLoginProvider:
                             expires_at=int(rec["expires_at"]), subject=rec.get("subject"), resource=rec.get("resource"))
 
     async def exchange_refresh_token(self, client: OAuthClientInformationFull, refresh_token: RefreshToken, scopes: list[str]) -> OAuthToken:
-        if self.store.pop("refresh", _hash(refresh_token.token)) is None:
+        rec = self.store.pop("refresh", _hash(refresh_token.token))
+        if rec is None:
             raise TokenError(error="invalid_grant", error_description="refresh token already used")
-        return self._issue(client.client_id, scopes or refresh_token.scopes, refresh_token.subject, refresh_token.resource)
+        return self._issue(client.client_id, scopes or rec["scopes"], rec.get("subject"), rec.get("resource"))
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         rec = self.store.get("access", _hash(token))
@@ -437,6 +446,7 @@ class GoogleLoginProvider:
         now = time.time()
         self._pending = {k: v for k, v in self._pending.items() if now - v.created < PENDING_LOGIN_TTL}
         self._codes = {k: v for k, v in self._codes.items() if v.expires_at > now}
+        self._code_identity = {k: v for k, v in self._code_identity.items() if k in self._codes}
 
 
 def _page(title: str, body: str, status: int) -> HTMLResponse:

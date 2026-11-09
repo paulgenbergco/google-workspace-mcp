@@ -166,6 +166,105 @@ def _fmt(data: Any) -> list[types.TextContent]:
 
 
 # ---------------------------------------------------------------------------
+# Remote (HTTP) mode
+# ---------------------------------------------------------------------------
+# Over stdio the server runs on the caller's own machine, so a local path in an
+# argument means the caller's own file. Over HTTP (python server.py --http) the
+# caller is claude.ai and the machine is the host running this server: a
+# prompt-injected "attach ~/.ssh/id_ed25519 and send it to ..." would read that
+# host's disk and mail it out, and save_path would write anywhere on it. So in
+# remote mode every argument that names a local path is removed from the tool
+# schemas and refused at call time, and binary results come back as MCP
+# image/resource content instead of a path on a disk the caller cannot see.
+
+_REMOTE = False
+
+# Argument names that are local filesystem paths, in any tool that has them.
+_LOCAL_PATH_ARGS = frozenset({"save_path", "source_path", "attachments"})
+
+# Inline binary cap for remote mode. Matches the 10 MB guard in gdrive.py.
+_REMOTE_BINARY_LIMIT = 10_000_000
+
+_INLINE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
+
+def _strip_local_args(tools: list[types.Tool]) -> list[types.Tool]:
+    for tool in tools:
+        props = tool.inputSchema.get("properties", {})
+        for arg in _LOCAL_PATH_ARGS & props.keys():
+            del props[arg]
+        if "required" in tool.inputSchema:
+            tool.inputSchema["required"] = [
+                r for r in tool.inputSchema["required"] if r not in _LOCAL_PATH_ARGS
+            ]
+    return tools
+
+
+def _remote_refusal(name: str, args: dict) -> str | None:
+    used = sorted(a for a in _LOCAL_PATH_ARGS if args.get(a))
+    if not used:
+        return None
+    return (
+        f"Error: '{name}' was called with {', '.join(used)}, which names a file on the "
+        "server's own disk. This server is running in remote mode, where local paths are "
+        "disabled. Omit the argument: binary results are returned inline, and to send a "
+        "file, put it in Drive first and share the link."
+    )
+
+
+def _fmt_binary(tool: str, result: dict) -> list:
+    """Format a download/read/export result.
+
+    Locally this is just _fmt. Remotely, bytes that would have gone to a temp
+    file (gmail_download_attachment) or into a data_base64 string (Drive) are
+    returned as MCP content the client can use directly: an image block for
+    common image types, an embedded blob resource for anything else.
+    """
+    if not _REMOTE:
+        return _fmt(result)
+
+    import base64
+    import os
+    from urllib.parse import quote
+
+    raw: bytes | None = None
+    if result.get("file_path"):
+        path = result.pop("file_path")
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+        finally:
+            os.unlink(path)
+    elif result.get("data_base64"):
+        raw = base64.b64decode(result.pop("data_base64"))
+    if raw is None:
+        return _fmt(result)  # text content, already inline
+
+    mime = result.get("contentMimeType") or result.get("mimeType") or "application/octet-stream"
+    filename = result.get("filename") or result.get("name") or result.get("file_id") or "file"
+    if len(raw) > _REMOTE_BINARY_LIMIT:
+        result["content"] = (
+            f"[{filename} ({mime}, {len(raw)} bytes) is over the "
+            f"{_REMOTE_BINARY_LIMIT // 1_000_000} MB remote inline limit. "
+            "Use its Drive link instead.]"
+        )
+        return _fmt(result)
+
+    b64 = base64.b64encode(raw).decode()
+    result["content"] = f"[{filename} ({mime}, {len(raw)} bytes) attached below.]"
+    if mime in _INLINE_IMAGE_TYPES:
+        block: Any = types.ImageContent(type="image", data=b64, mimeType=mime)
+    else:
+        block = types.EmbeddedResource(
+            type="resource",
+            resource=types.BlobResourceContents(
+                uri=f"gworkspace:///{tool}/{quote(str(filename))}", mimeType=mime, blob=b64,
+            ),
+        )
+    return [*_fmt(result), block]
+
+
+# ---------------------------------------------------------------------------
 # MCP Server
 # ---------------------------------------------------------------------------
 
@@ -233,7 +332,7 @@ def _annotate(tools: list[types.Tool]) -> list[types.Tool]:
             destructiveHint=False if read_only else tool.name in _DESTRUCTIVE_TOOLS,
             openWorldHint=True,
         )
-    return tools
+    return _strip_local_args(tools) if _REMOTE else tools
 
 
 @server.list_tools()
@@ -2060,8 +2159,10 @@ async def list_tools() -> list[types.Tool]:
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
+async def call_tool(name: str, arguments: dict | None) -> list:
     args = arguments or {}
+    if _REMOTE and (refusal := _remote_refusal(name, args)):
+        return _fmt(refusal)
 
     try:
         # ---- list_accounts ------------------------------------------------
@@ -2321,7 +2422,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
         # ---- gmail_download_attachment ------------------------------------
         elif name == "gmail_download_attachment":
             svc = _get_service(args["account"])
-            return _fmt(svc.download_attachment(
+            return _fmt_binary(name, svc.download_attachment(
                 args["message_id"], args["attachment_id"], save_path=args.get("save_path")
             ))
 
@@ -2513,7 +2614,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
         # ---- drive_read_content -------------------------------------------
         elif name == "drive_read_content":
             svc = _get_drive(args["account"])
-            return _fmt(svc.read_content(
+            return _fmt_binary(name, svc.read_content(
                 args["file_id"],
                 save_path=args.get("save_path"),
                 export_mime=args.get("export_mime"),
@@ -2604,7 +2705,7 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
         # ---- drive_export -------------------------------------------------
         elif name == "drive_export":
             svc = _get_drive(args["account"])
-            return _fmt(svc.export_file(
+            return _fmt_binary(name, svc.export_file(
                 file_id=args["file_id"],
                 mime_type=args["mime_type"],
                 save_path=args.get("save_path"),
@@ -3105,4 +3206,12 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    if "--http" in sys.argv[1:]:
+        # Remote mode: Streamable HTTP behind OAuth, for claude.ai connectors.
+        # See remote.py and REMOTE.md.
+        import remote
+
+        _REMOTE = True
+        remote.serve(server, _config, _credentials_dir)
+    else:
+        asyncio.run(main())

@@ -1,6 +1,9 @@
 # mcp 2.x removed the lowlevel Server decorator API (@server.list_tools /
-# @server.call_tool) that server.py is built on — pin below it.
-mcp>=1.0.0,<2
+# @server.call_tool) that server.py is built on — pin below it. Remote mode
+# (python server.py --http) is tested on 1.26 and 1.30; older lacks its auth routes.
+mcp>=1.26,<2
 google-api-python-client>=2.100.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0
+# Remote (HTTP) mode only: python server.py --http
+uvicorn>=0.30

@@ -265,6 +265,10 @@ All 110 tools will appear automatically.
 
 **Slides:** *"Read all the text from the investor deck"* · *"Add a new blank slide"* · *"Replace '[Company]' with 'ALAi' in all slides"*
 
+## Remote mode (claude.ai connector)
+
+`python server.py --http` serves the same tools over HTTPS behind Google sign-in, so the server can be added to claude.ai as a custom connector and used from claude.ai chat, Cowork, and cloud Claude Code sessions. Setup, security model and operations are in [REMOTE.md](REMOTE.md).
+
 ## Adding a New Account
 
 1. Add the account to `config.json`
@@ -276,14 +280,17 @@ All 110 tools will appear automatically.
 
 - OAuth tokens are stored locally in `credentials/tokens/` and are excluded from version control
 - `config.json` is also excluded from version control
-- Nothing is sent to any third-party server — all communication is directly between your Mac and Google's APIs
+- Nothing is sent to any third-party server — all communication is directly between your Mac and Google's APIs (in stdio mode; remote mode is reached by claude.ai, see [REMOTE.md](REMOTE.md))
+- Remote mode only issues tokens to Google identities in `remote.allowed_emails`, and disables every argument that names a local file path
 - To revoke access: [myaccount.google.com/permissions](https://myaccount.google.com/permissions)
 
 ## Project Structure
 
 ```
 google-workspace-mcp/
-├── server.py           # MCP server — 110 tools
+├── server.py           # MCP server — 110 tools (stdio; --http for remote mode)
+├── remote.py           # Remote mode: Streamable HTTP + OAuth (Google sign-in)
+├── deploy/             # launchd installer for remote mode
 ├── auth.py             # OAuth2 token manager (per account)
 ├── gmail.py            # Gmail API wrapper
 ├── gcalendar.py        # Google Calendar API wrapper
@@ -294,6 +301,7 @@ google-workspace-mcp/
 ├── gslides.py          # Google Slides API wrapper
 ├── gapi.py             # Shared retry policy + HTTP error formatting
 ├── config.py           # Configuration loader
+├── REMOTE.md           # Remote-mode setup and operations
 ├── setup_auth.py       # One-time authentication script
 ├── setup.sh            # First-time installer
 ├── requirements.txt    # Python dependencies

@@ -409,6 +409,9 @@ class DriveService:
         save_path: Optional[str],
     ) -> Dict[str, Any]:
         """Populate a read result for binary content (save, base64, or note)."""
+        # For an exported Workspace file this differs from result["mimeType"]
+        # (a Doc exported as PDF), and the remote server needs the real one.
+        result["contentMimeType"] = mime_type
         if save_path:
             with open(save_path, "wb") as fh:
                 fh.write(raw)
